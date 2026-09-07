@@ -24,8 +24,13 @@ DEFAULT = {
         },
         'local': {
             # {input} and {outdir} are substituted. Must write "<basename>.vtt"
-            # into {outdir}. Default matches the openai-whisper CLI.
-            'command': 'whisper {input} --model base.en --language en '
+            # into {outdir}. Default matches the openai-whisper CLI, invoked via
+            # `python3 -m whisper` rather than the bare `whisper` binary so it
+            # keeps working even when the whisper console-script isn't on the
+            # PATH the pipeline runs with (a common issue after `pip install
+            # --user`/system-wide installs) -- as long as `python3` can import
+            # the whisper module, this command finds it.
+            'command': 'python3 -m whisper {input} --model base.en --language en '
                        '--output_format vtt --output_dir {outdir}',
         },
     },
@@ -97,6 +102,14 @@ DEFAULT = {
 
 WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+# Previous default for transcription.local.command, before it switched to
+# invoking `python3 -m whisper` instead of the bare `whisper` binary (see
+# DEFAULT above). Used by load() to auto-upgrade a pipeline.json that still
+# has this exact untouched default, without clobbering a command someone
+# customized by hand.
+_OLD_DEFAULT_LOCAL_COMMAND = ('whisper {input} --model base.en --language en '
+                               '--output_format vtt --output_dir {outdir}')
+
 
 def _deep_merge(base, overrides):
     result = dict(base)
@@ -114,7 +127,13 @@ def load():
         return json.loads(json.dumps(DEFAULT))
     with open(CONFIG_FILE, 'r') as f:
         raw = json.load(f)
-    return _deep_merge(DEFAULT, raw)
+    config = _deep_merge(DEFAULT, raw)
+
+    if config['transcription']['local']['command'] == _OLD_DEFAULT_LOCAL_COMMAND:
+        config['transcription']['local']['command'] = DEFAULT['transcription']['local']['command']
+        save(config)
+
+    return config
 
 
 def save(config):

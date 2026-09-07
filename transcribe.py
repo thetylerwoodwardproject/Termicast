@@ -37,9 +37,10 @@ def check_ready(config):
         cfg = config['transcription']['local']
         cmd_str = cfg['command'].format(input='', outdir='')
         try:
-            executable = shlex.split(cmd_str)[0]
-        except (IndexError, ValueError):
-            executable = ''
+            tokens = shlex.split(cmd_str)
+        except ValueError:
+            tokens = []
+        executable = tokens[0] if tokens else ''
         if executable and not shutil.which(executable):
             raise TranscriptionError(
                 f'Local transcription command "{executable}" was not found on PATH.\n'
@@ -47,6 +48,26 @@ def check_ready(config):
                 f'or install whisper.cpp/faster-whisper if that\'s what your command template uses), '
                 f'or switch to cloud transcription in "Configure AI pipeline" > "Transcription (Whisper)".'
             )
+
+        # `python3 -m <module>` (the default) sidesteps PATH issues with the
+        # console-script itself, but can still fail if the module isn't
+        # installed for *that* interpreter -- check for that specifically,
+        # since it's a much clearer failure than a raw ModuleNotFoundError
+        # traceback after conversion has already run.
+        if executable.startswith('python') and len(tokens) >= 3 and tokens[1] == '-m':
+            module = tokens[2]
+            check = subprocess.run([executable, '-c', f'import {module}'],
+                                    capture_output=True, text=True)
+            if check.returncode != 0:
+                interp_path = shutil.which(executable) or executable
+                raise TranscriptionError(
+                    f'"{module}" is not installed for the Python interpreter this command uses '
+                    f'({interp_path}).\n'
+                    f'  Install it there with `{executable} -m pip install -U openai-whisper`, or '
+                    f'if you installed it for a different Python (a venv, a different python3 '
+                    f'version, etc.), point the command template at that interpreter instead via '
+                    f'"Configure AI pipeline" > "Transcription (Whisper)".'
+                )
     else:
         raise TranscriptionError(f'Unknown transcription mode: {mode}')
 
