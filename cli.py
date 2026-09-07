@@ -1247,6 +1247,7 @@ def configure_pipeline():
         'Soundbite rules',
         'Waveform video',
         'Recurring publish schedule',
+        'Default input folder',
         'Back'
     ])
     if section == 'Back':
@@ -1261,9 +1262,20 @@ def configure_pipeline():
             config['transcription']['cloud']['model'] = prompt(
                 'Whisper model', config['transcription']['cloud']['model'])
         else:
+            print('''
+  This is the shell command used to run a local Whisper-compatible tool
+  (openai-whisper, whisper.cpp, faster-whisper...) on each episode.
+  Termicast fills in two placeholders when it runs this command:
+    {input}   the audio file to transcribe (a copy Termicast already made,
+              not your original file -- your original is never touched)
+    {outdir}  a scratch folder Termicast creates just for this run and
+              deletes right after -- NOT your media folder. Your command
+              must write "<basename>.vtt" into it; Termicast then copies
+              that .vtt to where it belongs.
+  You only need to change this if your Whisper tool's CLI syntax differs
+  from openai-whisper's. Leave it as-is otherwise.''')
             config['transcription']['local']['command'] = prompt(
-                'Local command template (must use {input} and {outdir}, and write "<basename>.vtt")',
-                config['transcription']['local']['command'])
+                'Local command template', config['transcription']['local']['command'])
         print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
 
     elif section == 'LLM provider (Claude/OpenAI)':
@@ -1312,6 +1324,16 @@ def configure_pipeline():
             print('\n  Reminder: cron must run generate.py at least as often as your slot')
             print('  granularity (e.g. hourly) for episodes to go live promptly. See README.')
 
+    elif section == 'Default input folder':
+        print('''
+  "Process New Episode" asks for a folder holding that episode's audio
+  (WAV/FLAC/MP3) and artwork PNG. Set a default here so it's pre-filled
+  each time (just press Enter to accept it, or type a different path to
+  override for one run). Leave blank to always ask with no default.
+  Files in this folder are only ever read, never modified or deleted.''')
+        config['inputDir'] = prompt(
+            'Default input folder (blank to always ask)', config.get('inputDir', '')) or ''
+
     pipeline_config.save(config)
     print('\n  Pipeline config saved to pipeline.json.')
 
@@ -1350,7 +1372,9 @@ def process_new_episode_ai():
     divider('Process New Episode (AI Pipeline)')
     config = pipeline_config.load()
 
-    input_dir = prompt('Folder containing the episode audio (WAV/FLAC/MP3) and artwork PNG', required=True)
+    input_dir = prompt(
+        'Folder containing the episode audio (WAV/FLAC/MP3) and artwork PNG',
+        config.get('inputDir') or None, required=True)
     if not os.path.isdir(input_dir):
         print(f'\n  Not a folder: {input_dir}\n')
         return
