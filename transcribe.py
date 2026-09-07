@@ -136,8 +136,10 @@ def _transcribe_local(audio_path, config, dest_vtt_path):
             candidates = [f for f in os.listdir(outdir) if f.endswith('.vtt')]
             if not candidates:
                 raise TranscriptionError(
-                    f'Local transcription command did not produce a .vtt file in {outdir}. '
-                    f'stdout:\n{proc.stdout[-1000:]}'
+                    f'Local transcription command exited 0 but did not produce a .vtt file in '
+                    f'{outdir} (files present: {os.listdir(outdir) or "none"}).\n'
+                    f'stdout:\n{proc.stdout[-1000:]}\n'
+                    f'stderr:\n{proc.stderr[-1000:]}'
                 )
             produced = os.path.join(outdir, candidates[0])
 
