@@ -1236,11 +1236,129 @@ def mirror_menu():
 
 # ─── AI pipeline: config wizard ───────────────────────────────────────────────
 
+def _configure_transcription(config):
+    print('''
+  Two ways to transcribe episodes:
+    local   Local Whisper -- runs on this server, free, one-time setup
+    cloud   OpenAI's Whisper API -- no setup, costs money per episode''')
+    mode = prompt_choice('Mode', ['local', 'cloud'], config['transcription']['mode'])
+    config['transcription']['mode'] = mode
+    if mode == 'cloud':
+        config['transcription']['cloud']['apiKeyEnv'] = prompt(
+            'Env var holding the OpenAI API key', config['transcription']['cloud']['apiKeyEnv'])
+        config['transcription']['cloud']['model'] = prompt(
+            'Whisper model', config['transcription']['cloud']['model'])
+    else:
+        auto_install = prompt_bool(
+            'Auto-install openai-whisper into a dedicated virtual environment? '
+            '(CPU-only PyTorch -- no multi-GB CUDA downloads -- and no sudo/PEP-668 '
+            'fights with the system Python. Skips reinstalling if already set up.)', True)
+        installed_command = None
+        if auto_install:
+            print()
+            try:
+                venv_python = transcribe.install_local_whisper(os.path.dirname(__file__))
+                installed_command = transcribe.local_command_for(venv_python)
+                print(f'\n  Local Whisper ready at {venv_python}.')
+            except transcribe.TranscriptionError as e:
+                print(f'\n  Auto-install failed: {e}\n  Falling back to manual command setup.\n')
+
+        if installed_command:
+            config['transcription']['local']['command'] = installed_command
+        else:
+            print('''
+  This is the shell command used to run a local Whisper-compatible tool
+  (openai-whisper, whisper.cpp, faster-whisper...) on each episode.
+  Termicast fills in two placeholders when it runs this command:
+    {input}   the audio file to transcribe -- a converted copy Termicast
+              already made, not your original source file directly
+    {outdir}  a scratch folder Termicast creates just for this run and
+              deletes right after -- NOT your media folder. Your command
+              must write "<basename>.vtt" into it; Termicast then copies
+              that .vtt to where it belongs.
+  You only need to change this if your Whisper tool's CLI syntax differs
+  from openai-whisper's. Leave it as-is otherwise.''')
+            config['transcription']['local']['command'] = prompt(
+                'Local command template', config['transcription']['local']['command'])
+    print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
+
+
+def _configure_llm(config):
+    print('''
+  This is the LLM that turns the transcript into episode titles,
+  description, keywords, chapters, soundbite picks, and social posts.''')
+    provider = prompt_choice('Provider', ['claude', 'openai'], config['llm']['provider'])
+    config['llm']['provider'] = provider
+    if provider == 'claude':
+        config['llm']['claude']['apiKeyEnv'] = prompt(
+            'Env var holding the Anthropic API key', config['llm']['claude']['apiKeyEnv'])
+        config['llm']['claude']['model'] = prompt('Claude model', config['llm']['claude']['model'])
+    else:
+        config['llm']['openai']['apiKeyEnv'] = prompt(
+            'Env var holding the OpenAI API key', config['llm']['openai']['apiKeyEnv'])
+        config['llm']['openai']['model'] = prompt('OpenAI model', config['llm']['openai']['model'])
+    print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
+
+
+def _configure_prompts(config):
+    print('  These instructions are sent to the LLM for each generation step.')
+    print('  Enter new text for each, or press Enter to keep the current instructions.\n')
+    for key in ('tone', 'titles', 'description', 'keywords', 'chapters', 'soundbites', 'socialPosts'):
+        config['prompts'][key] = prompt(key, config['prompts'][key])
+
+
+def _configure_soundbites(config):
+    sb = config['soundbites']
+    sb['count'] = int(prompt('Number of soundbites to generate', str(sb['count'])))
+    sb['minDurationSeconds'] = float(prompt('Minimum clip length (seconds)', str(sb['minDurationSeconds'])))
+    sb['maxDurationSeconds'] = float(prompt('Maximum clip length (seconds)', str(sb['maxDurationSeconds'])))
+    sb['maxTotalDurationSeconds'] = float(prompt(
+        'Maximum combined length of all soundbites (seconds)', str(sb['maxTotalDurationSeconds'])))
+    sb['titleMaxChars'] = int(prompt('Max soundbite title length (chars)', str(sb['titleMaxChars'])))
+
+
+def _configure_video(config):
+    v = config['video']
+    v['enabled'] = prompt_bool('Generate waveform MP4s for soundbites?', v['enabled'])
+    if v['enabled']:
+        v['bgColor'] = prompt_choice(
+            'Background color (solid, for chroma-key compositing in Canva)',
+            ['RED', 'GREEN', 'BLUE'], v['bgColor'])
+        v['waveformColorHex'] = prompt('Waveform line color (hex, e.g. #FF4500)', v['waveformColorHex'])
+        v['fps'] = int(prompt('Frames per second', str(v['fps'])))
+
+
+def _configure_schedule(config):
+    r = config['schedule']['recurring']
+    r['enabled'] = prompt_bool('Auto-schedule processed episodes on a recurring weekly slot?', r['enabled'])
+    if r['enabled']:
+        r['dayOfWeek'] = prompt_choice('Day of week', pipeline_config.WEEKDAYS, r['dayOfWeek'])
+        r['time'] = prompt('Time (HH:MM, 24h, UTC)', r['time'])
+        print('\n  Reminder: cron must run generate.py at least as often as your slot')
+        print('  granularity (e.g. hourly) for episodes to go live promptly. See README.')
+
+
+def _configure_input_dir(config):
+    print('''
+  "Process New Episode" asks for a folder holding that episode's audio
+  (WAV/FLAC/MP3) and artwork PNG. Set a default here so it's pre-filled
+  each time (just press Enter to accept it, or type a different path to
+  override for one run). Leave blank to always ask with no default.
+  Note: once the audio/artwork in that folder are converted and copied
+  into ./media/, the originals are deleted from this folder.''')
+    config['inputDir'] = prompt(
+        'Default input folder (blank to always ask)', config.get('inputDir', '')) or ''
+
+
+GUIDED_SETUP = 'Guided setup (walk through everything, start to finish)'
+
+
 def configure_pipeline():
     divider('Configure AI Pipeline')
     config = pipeline_config.load()
 
     section = prompt_choice('What do you want to configure?', [
+        GUIDED_SETUP,
         'Transcription (Whisper)',
         'LLM provider (Claude/OpenAI)',
         'Prompts / tone',
@@ -1253,104 +1371,42 @@ def configure_pipeline():
     if section == 'Back':
         return
 
-    if section == 'Transcription (Whisper)':
-        mode = prompt_choice('Mode', ['cloud', 'local'], config['transcription']['mode'])
-        config['transcription']['mode'] = mode
-        if mode == 'cloud':
-            config['transcription']['cloud']['apiKeyEnv'] = prompt(
-                'Env var holding the OpenAI API key', config['transcription']['cloud']['apiKeyEnv'])
-            config['transcription']['cloud']['model'] = prompt(
-                'Whisper model', config['transcription']['cloud']['model'])
-        else:
-            auto_install = prompt_bool(
-                'Auto-install openai-whisper into a dedicated virtual environment? '
-                '(CPU-only PyTorch -- no multi-GB CUDA downloads -- and no sudo/PEP-668 '
-                'fights with the system Python. Skips reinstalling if already set up.)', True)
-            installed_command = None
-            if auto_install:
-                print()
-                try:
-                    venv_python = transcribe.install_local_whisper(os.path.dirname(__file__))
-                    installed_command = transcribe.local_command_for(venv_python)
-                    print(f'\n  Local Whisper ready at {venv_python}.')
-                except transcribe.TranscriptionError as e:
-                    print(f'\n  Auto-install failed: {e}\n  Falling back to manual command setup.\n')
-
-            if installed_command:
-                config['transcription']['local']['command'] = installed_command
-            else:
-                print('''
-  This is the shell command used to run a local Whisper-compatible tool
-  (openai-whisper, whisper.cpp, faster-whisper...) on each episode.
-  Termicast fills in two placeholders when it runs this command:
-    {input}   the audio file to transcribe -- a converted copy Termicast
-              already made, not your original source file directly
-    {outdir}  a scratch folder Termicast creates just for this run and
-              deletes right after -- NOT your media folder. Your command
-              must write "<basename>.vtt" into it; Termicast then copies
-              that .vtt to where it belongs.
-  You only need to change this if your Whisper tool's CLI syntax differs
-  from openai-whisper's. Leave it as-is otherwise.''')
-                config['transcription']['local']['command'] = prompt(
-                    'Local command template', config['transcription']['local']['command'])
-        print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
-
-    elif section == 'LLM provider (Claude/OpenAI)':
-        provider = prompt_choice('Provider', ['claude', 'openai'], config['llm']['provider'])
-        config['llm']['provider'] = provider
-        if provider == 'claude':
-            config['llm']['claude']['apiKeyEnv'] = prompt(
-                'Env var holding the Anthropic API key', config['llm']['claude']['apiKeyEnv'])
-            config['llm']['claude']['model'] = prompt('Claude model', config['llm']['claude']['model'])
-        else:
-            config['llm']['openai']['apiKeyEnv'] = prompt(
-                'Env var holding the OpenAI API key', config['llm']['openai']['apiKeyEnv'])
-            config['llm']['openai']['model'] = prompt('OpenAI model', config['llm']['openai']['model'])
-
-    elif section == 'Prompts / tone':
-        print('  These instructions are sent to the LLM for each generation step.')
-        print('  Enter new text for each, or press Enter to keep the current instructions.\n')
-        for key in ('tone', 'titles', 'description', 'keywords', 'chapters', 'soundbites', 'socialPosts'):
-            config['prompts'][key] = prompt(key, config['prompts'][key])
-
-    elif section == 'Soundbite rules':
-        sb = config['soundbites']
-        sb['count'] = int(prompt('Number of soundbites to generate', str(sb['count'])))
-        sb['minDurationSeconds'] = float(prompt('Minimum clip length (seconds)', str(sb['minDurationSeconds'])))
-        sb['maxDurationSeconds'] = float(prompt('Maximum clip length (seconds)', str(sb['maxDurationSeconds'])))
-        sb['maxTotalDurationSeconds'] = float(prompt(
-            'Maximum combined length of all soundbites (seconds)', str(sb['maxTotalDurationSeconds'])))
-        sb['titleMaxChars'] = int(prompt('Max soundbite title length (chars)', str(sb['titleMaxChars'])))
-
-    elif section == 'Waveform video':
-        v = config['video']
-        v['enabled'] = prompt_bool('Generate waveform MP4s for soundbites?', v['enabled'])
-        if v['enabled']:
-            v['bgColor'] = prompt_choice(
-                'Background color (solid, for chroma-key compositing in Canva)',
-                ['RED', 'GREEN', 'BLUE'], v['bgColor'])
-            v['waveformColorHex'] = prompt('Waveform line color (hex, e.g. #FF4500)', v['waveformColorHex'])
-            v['fps'] = int(prompt('Frames per second', str(v['fps'])))
-
-    elif section == 'Recurring publish schedule':
-        r = config['schedule']['recurring']
-        r['enabled'] = prompt_bool('Auto-schedule processed episodes on a recurring weekly slot?', r['enabled'])
-        if r['enabled']:
-            r['dayOfWeek'] = prompt_choice('Day of week', pipeline_config.WEEKDAYS, r['dayOfWeek'])
-            r['time'] = prompt('Time (HH:MM, 24h, UTC)', r['time'])
-            print('\n  Reminder: cron must run generate.py at least as often as your slot')
-            print('  granularity (e.g. hourly) for episodes to go live promptly. See README.')
-
-    elif section == 'Default input folder':
+    if section == GUIDED_SETUP:
         print('''
-  "Process New Episode" asks for a folder holding that episode's audio
-  (WAV/FLAC/MP3) and artwork PNG. Set a default here so it's pre-filled
-  each time (just press Enter to accept it, or type a different path to
-  override for one run). Leave blank to always ask with no default.
-  Note: once the audio/artwork in that folder are converted and copied
-  into ./media/, the originals are deleted from this folder.''')
-        config['inputDir'] = prompt(
-            'Default input folder (blank to always ask)', config.get('inputDir', '')) or ''
+  This walks through the whole pipeline in order: transcription, the LLM
+  provider that writes titles/descriptions/keywords/chapters/soundbites/
+  social posts, prompts/tone, soundbite rules, waveform video, recurring
+  schedule, and the default input folder. Every prompt shows its current
+  value as a default -- press Enter to keep it. Nothing is saved until
+  you finish (or Ctrl+C to stop without saving).''')
+        divider('1/7 - Transcription')
+        _configure_transcription(config)
+        divider('2/7 - LLM provider')
+        _configure_llm(config)
+        divider('3/7 - Prompts / tone')
+        _configure_prompts(config)
+        divider('4/7 - Soundbite rules')
+        _configure_soundbites(config)
+        divider('5/7 - Waveform video')
+        _configure_video(config)
+        divider('6/7 - Recurring publish schedule')
+        _configure_schedule(config)
+        divider('7/7 - Default input folder')
+        _configure_input_dir(config)
+    elif section == 'Transcription (Whisper)':
+        _configure_transcription(config)
+    elif section == 'LLM provider (Claude/OpenAI)':
+        _configure_llm(config)
+    elif section == 'Prompts / tone':
+        _configure_prompts(config)
+    elif section == 'Soundbite rules':
+        _configure_soundbites(config)
+    elif section == 'Waveform video':
+        _configure_video(config)
+    elif section == 'Recurring publish schedule':
+        _configure_schedule(config)
+    elif section == 'Default input folder':
+        _configure_input_dir(config)
 
     pipeline_config.save(config)
     print('\n  Pipeline config saved to pipeline.json.')

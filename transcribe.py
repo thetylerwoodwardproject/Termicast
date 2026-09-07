@@ -59,10 +59,10 @@ def check_ready(config):
         # traceback after conversion has already run.
         if executable.startswith('python') and len(tokens) >= 3 and tokens[1] == '-m':
             module = tokens[2]
+            interp_path = shutil.which(executable) or executable
             check = subprocess.run([executable, '-c', f'import {module}'],
                                     capture_output=True, text=True)
             if check.returncode != 0:
-                interp_path = shutil.which(executable) or executable
                 raise TranscriptionError(
                     f'"{module}" is not installed for the Python interpreter this command uses '
                     f'({interp_path}).\n'
@@ -70,6 +70,23 @@ def check_ready(config):
                     f'if you installed it for a different Python (a venv, a different python3 '
                     f'version, etc.), point the command template at that interpreter instead via '
                     f'"Configure AI pipeline" > "Transcription (Whisper)".'
+                )
+
+            # PyPI has two unrelated packages both importable as `whisper`:
+            # openai-whisper (speech-to-text, what this command needs) and
+            # Graphite's whisper (a time-series database, `pip install
+            # whisper` with no "openai-" prefix). The latter imports fine but
+            # has no CLI, so `python -m whisper <args>` silently no-ops --
+            # exit 0, no output, no files -- which otherwise looks identical
+            # to a hang or a misconfigured command template.
+            if module == 'whisper' and not whisper_ready_for(executable):
+                raise TranscriptionError(
+                    f'The "whisper" module installed for {interp_path} is not openai-whisper -- '
+                    f'it looks like the unrelated Graphite "whisper" package (a PyPI name collision; '
+                    f'`pip install whisper` installs that one, not this one). It imports fine but has '
+                    f'no transcription CLI, so this command would silently do nothing.\n'
+                    f'  Fix: `{executable} -m pip uninstall whisper && '
+                    f'{executable} -m pip install -U openai-whisper`.'
                 )
     else:
         raise TranscriptionError(f'Unknown transcription mode: {mode}')

@@ -226,7 +226,12 @@ replace each other -- pick whichever fits a given episode:
 ### Configuring the pipeline
 
 Run "Configure AI pipeline" in the CLI, or edit `pipeline.json` directly.
-It controls:
+The first option, "Guided setup", walks through every setting below in
+order in one pass -- transcription, then the LLM provider, then prompts/
+tone, soundbite rules, waveform video, recurring schedule, and the
+default input folder -- which is the easiest way to get a fresh install
+running end to end. Every other menu entry jumps straight to one section,
+for touching up a single setting later. Either way it controls:
 
 - **Transcription**: `cloud` (OpenAI's hosted Whisper API) or `local` (a
   command template you provide for whisper.cpp / openai-whisper / etc, run
