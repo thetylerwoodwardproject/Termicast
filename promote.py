@@ -30,14 +30,12 @@ import os
 import re
 import shutil
 import xml.etree.ElementTree as ET
-from datetime import timezone
-from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import store
 import mirror as mirrormod
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.environ.get('TERMICAST_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
 MEDIA_DIR = os.path.join(BASE_DIR, 'media')
 
 NS = {
@@ -226,8 +224,13 @@ def promote_mirror(log=print):
     existing_guids = {e.get('guid') for e in data['episodes']}
     added = skipped_dup = skipped_missing = 0
 
-    for item in channel.findall('item'):
+    from display import color, Progress
+    items = channel.findall('item')
+    for index, item in enumerate(items, 1):
         title = _text(item, 'title') or 'Untitled'
+        progress = Progress(len(items), label=f'  Promote: {title}', log=log, unit='episodes')
+        progress.update(index)
+        progress.finish()
         guid_el = item.find('guid')
         ep_guid = (guid_el.text or '').strip() if guid_el is not None else None
         if not ep_guid:
@@ -247,7 +250,7 @@ def promote_mirror(log=print):
 
         pub_raw = _text(item, 'pubDate')
         try:
-            pub_date = parsedate_to_datetime(pub_raw).astimezone(timezone.utc).isoformat()
+            pub_date = store.parse_rss_date(pub_raw)
         except Exception:
             log(f'    "{title}": unparseable pubDate "{pub_raw}", skipping')
             skipped_missing += 1
@@ -310,10 +313,10 @@ def promote_mirror(log=print):
         data['episodes'].append(episode)
         existing_guids.add(ep_guid)
         added += 1
-        log(f'    adopted: {title}')
+        log(color(f'    adopted: {title}', '32'))
 
     data['show'].update(show)
-    data['episodes'].sort(key=lambda e: e['pubDate'], reverse=True)
+    data['episodes'].sort(key=store.episode_date, reverse=True)
     store.save(data)
 
     import feed as feedgen
