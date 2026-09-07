@@ -1266,8 +1266,8 @@ def configure_pipeline():
   This is the shell command used to run a local Whisper-compatible tool
   (openai-whisper, whisper.cpp, faster-whisper...) on each episode.
   Termicast fills in two placeholders when it runs this command:
-    {input}   the audio file to transcribe (a copy Termicast already made,
-              not your original file -- your original is never touched)
+    {input}   the audio file to transcribe -- a converted copy Termicast
+              already made, not your original source file directly
     {outdir}  a scratch folder Termicast creates just for this run and
               deletes right after -- NOT your media folder. Your command
               must write "<basename>.vtt" into it; Termicast then copies
@@ -1330,7 +1330,8 @@ def configure_pipeline():
   (WAV/FLAC/MP3) and artwork PNG. Set a default here so it's pre-filled
   each time (just press Enter to accept it, or type a different path to
   override for one run). Leave blank to always ask with no default.
-  Files in this folder are only ever read, never modified or deleted.''')
+  Note: once the audio/artwork in that folder are converted and copied
+  into ./media/, the originals are deleted from this folder.''')
         config['inputDir'] = prompt(
             'Default input folder (blank to always ask)', config.get('inputDir', '')) or ''
 
@@ -1370,6 +1371,8 @@ def _pick_input_files(input_dir):
 
 def process_new_episode_ai():
     divider('Process New Episode (AI Pipeline)')
+    print('  Note: once the source audio/artwork are converted and copied')
+    print('  into ./media/, the originals are deleted from the input folder.\n')
     config = pipeline_config.load()
 
     input_dir = prompt(
@@ -1468,14 +1471,24 @@ def process_new_episode_ai():
 
     final_audio_filename = f'{prefix}_{slug}.mp3'
     shutil.copyfile(converted_mp3, os.path.join(MEDIA_DIR, final_audio_filename))
+    original_audio_path = os.path.join(input_dir, audio_file)
+    try:
+        os.remove(original_audio_path)
+    except OSError as e:
+        print(f'    Warning: could not delete source audio {original_audio_path}: {e}')
 
     artwork_url = None
     if art_file:
         ext = os.path.splitext(art_file)[1] or '.png'
         artwork_filename = f'{prefix}_{slug}-art{ext}'
-        shutil.copyfile(os.path.join(input_dir, art_file), os.path.join(MEDIA_DIR, artwork_filename))
+        original_art_path = os.path.join(input_dir, art_file)
+        shutil.copyfile(original_art_path, os.path.join(MEDIA_DIR, artwork_filename))
         base_url = store.get_show().get('baseUrl', '').rstrip('/')
         artwork_url = f'{base_url}/media/{artwork_filename}'
+        try:
+            os.remove(original_art_path)
+        except OSError as e:
+            print(f'    Warning: could not delete source artwork {original_art_path}: {e}')
 
     transcript_filename = f'{prefix}_{slug}.vtt'
     shutil.copyfile(vtt_path, os.path.join(MEDIA_DIR, transcript_filename))

@@ -89,8 +89,9 @@ DEFAULT = {
     'workDir': os.path.join(os.path.dirname(__file__), 'pipeline_work'),
     'editorialDir': os.path.join(os.path.dirname(__file__), 'editorial'),
     # Default folder "Process New Episode" reads audio/artwork from. Blank
-    # means always ask. The original file here is never modified or deleted --
-    # only copies are made (converted audio in workDir, then into ./media/).
+    # means always ask. The source audio/artwork files here are deleted once
+    # they've been converted/copied into ./media/ -- keep your own backup of
+    # originals if you want one.
     'inputDir': '',
 }
 
