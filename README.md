@@ -18,8 +18,10 @@ static feed.xml that nginx serves directly.
   `Pillow` for the AI pipeline's soundbite waveform videos)
 - `ffmpeg` + `ffprobe` (only needed for the AI pipeline: audio conversion,
   soundbite clip extraction, and waveform video rendering)
-- A local Whisper install (e.g. `pip3 install openai-whisper`, or
-  whisper.cpp) if you use local transcription instead of the OpenAI cloud API
+- A local Whisper install if you use local transcription instead of the
+  OpenAI cloud API -- Termicast can set this up for you (see
+  [Local Whisper setup](#local-whisper-setup)), or install openai-whisper/
+  whisper.cpp yourself
 
 ## Setup
 
@@ -246,6 +248,69 @@ API keys are **never** stored in pipeline.json -- only the *name* of the
 environment variable to read them from (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY` by default). Export them in your shell/systemd unit/crontab
 before running the pipeline.
+
+### Local Whisper setup
+
+Setting up local transcription by hand has enough sharp edges (see
+below) that it's easiest to just let Termicast do it: in "Configure AI
+pipeline" > "Transcription (Whisper)" > local mode, say yes to
+"Auto-install openai-whisper into a dedicated virtual environment". It
+creates `.venv-whisper/` next to `cli.py`, installs the CPU-only PyTorch
+build (skips the multi-GB CUDA/GPU packages a typical server has no use
+for) and openai-whisper into it, points the local command template at
+that venv, and no-ops if it's already set up and working. The same
+prompt appears inline if "Process New Episode" hits an unconfigured/
+broken local backend, so you don't have to back out to the settings menu
+mid-run. This needs the `python3-venv` apt package on Debian/Ubuntu if
+it isn't already installed (`sudo apt install python3-venv`).
+
+### Local Whisper troubleshooting
+
+If you'd rather set it up by hand, the default local command is
+`python3 -m whisper {input} --model base.en --language en --output_format
+vtt --output_dir {outdir}` (it runs the module via `python3 -m` rather
+than the bare `whisper` binary, since the console-script's install
+location isn't always on the `PATH` the pipeline runs with). If
+`check_ready()`'s preflight check or the transcription step itself fails,
+it's almost always one of these:
+
+- **`pip3 install openai-whisper` fails with `externally-managed-environment`**
+  (PEP 668, on Debian/Ubuntu). Either install with
+  `pip3 install --break-system-packages -U openai-whisper`, or -- cleaner,
+  and lets you stop running Termicast as root/`sudo` entirely --
+  create a dedicated venv and point the pipeline at it:
+  ```bash
+  python3 -m venv /opt/termicast/.venv
+  /opt/termicast/.venv/bin/pip install -U openai-whisper
+  ```
+  then in "Configure AI pipeline" > "Transcription (Whisper)", change the
+  command template's `python3` to `/opt/termicast/.venv/bin/python3`.
+
+- **`whisper: not found` (exit 127) even though it's installed.** The
+  `whisper` console script landed somewhere not on `PATH` for whatever user/
+  environment runs the pipeline -- common after `pip3 install --user` or a
+  `sudo pip3 install` where `sudo` resets `PATH`. This is exactly why the
+  default command uses `python3 -m whisper` instead of bare `whisper`: it
+  only needs the module to be importable by that `python3`, not the script
+  to be on `PATH`. If you still hit this with a customized command, run
+  `pip3 install openai-whisper` with the same user/`sudo` context the
+  pipeline itself runs under, or run `which python3` under that same
+  context and use its full path in the command template.
+
+- **Transcription "succeeds" (exit 0) with empty output and no `.vtt`
+  file.** PyPI has two unrelated packages both importable as `import
+  whisper`: **openai-whisper** (speech-to-text, what this needs) and
+  **Graphite's `whisper`** (an old time-series database, installed by
+  `pip install whisper` -- note, no `openai-` prefix). The latter imports
+  fine but has no CLI, so `python3 -m whisper <args>` silently does
+  nothing. Fix:
+  ```bash
+  pip3 uninstall whisper
+  pip3 install -U openai-whisper
+  ```
+  (add `--break-system-packages`, or use a venv, per above, if pip refuses
+  otherwise). `check_ready()` checks for this specific collision and will
+  tell you if it's still present.
 
 ### Recurring schedule + cron
 

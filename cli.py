@@ -1262,7 +1262,24 @@ def configure_pipeline():
             config['transcription']['cloud']['model'] = prompt(
                 'Whisper model', config['transcription']['cloud']['model'])
         else:
-            print('''
+            auto_install = prompt_bool(
+                'Auto-install openai-whisper into a dedicated virtual environment? '
+                '(CPU-only PyTorch -- no multi-GB CUDA downloads -- and no sudo/PEP-668 '
+                'fights with the system Python. Skips reinstalling if already set up.)', True)
+            installed_command = None
+            if auto_install:
+                print()
+                try:
+                    venv_python = transcribe.install_local_whisper(os.path.dirname(__file__))
+                    installed_command = transcribe.local_command_for(venv_python)
+                    print(f'\n  Local Whisper ready at {venv_python}.')
+                except transcribe.TranscriptionError as e:
+                    print(f'\n  Auto-install failed: {e}\n  Falling back to manual command setup.\n')
+
+            if installed_command:
+                config['transcription']['local']['command'] = installed_command
+            else:
+                print('''
   This is the shell command used to run a local Whisper-compatible tool
   (openai-whisper, whisper.cpp, faster-whisper...) on each episode.
   Termicast fills in two placeholders when it runs this command:
@@ -1274,8 +1291,8 @@ def configure_pipeline():
               that .vtt to where it belongs.
   You only need to change this if your Whisper tool's CLI syntax differs
   from openai-whisper's. Leave it as-is otherwise.''')
-            config['transcription']['local']['command'] = prompt(
-                'Local command template', config['transcription']['local']['command'])
+                config['transcription']['local']['command'] = prompt(
+                    'Local command template', config['transcription']['local']['command'])
         print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
 
     elif section == 'LLM provider (Claude/OpenAI)':
@@ -1386,11 +1403,25 @@ def process_new_episode_ai():
     if not audio_file:
         return
 
-    try:
-        transcribe.check_ready(config)
-    except transcribe.TranscriptionError as e:
-        print(f'\n  Transcription is not set up: {e}\n')
-        return
+    while True:
+        try:
+            transcribe.check_ready(config)
+            break
+        except transcribe.TranscriptionError as e:
+            print(f'\n  Transcription is not set up: {e}\n')
+            if config['transcription']['mode'] != 'local':
+                return
+            if not prompt_bool('Auto-install openai-whisper into a dedicated virtual environment now?', True):
+                return
+            print()
+            try:
+                venv_python = transcribe.install_local_whisper(os.path.dirname(__file__))
+                config['transcription']['local']['command'] = transcribe.local_command_for(venv_python)
+                pipeline_config.save(config)
+                print(f'\n  Local Whisper ready at {venv_python}.\n')
+            except transcribe.TranscriptionError as install_err:
+                print(f'\n  Auto-install failed: {install_err}\n')
+                return
 
     ep_id = str(uuid.uuid4())
     work_dir = os.path.join(config['workDir'], ep_id)

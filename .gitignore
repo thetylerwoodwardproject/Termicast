@@ -10,3 +10,4 @@ mirror/
 pipeline.json
 pipeline_work/
 editorial/
+.venv-whisper/
