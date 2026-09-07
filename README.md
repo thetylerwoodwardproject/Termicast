@@ -122,6 +122,28 @@ Your feed is now live at `https://audio.example.com/feed.xml`.
 
 ---
 
+## Updating
+
+Termicast has no build or install step -- pulling the latest code is the update:
+
+```bash
+cd /opt/termicast
+git pull
+pip3 install -r requirements.txt
+```
+
+- `pip3 install -r requirements.txt` is a no-op if requirements haven't
+  changed, so it's safe to always run it after pulling.
+- Nothing runs as a persistent process, so there's no service to restart.
+  Just quit any `cli.py` session you have open before pulling (a running
+  session already has the old code loaded in memory, so a mid-session
+  `git pull` won't take effect until you exit and run `python3 cli.py`
+  again) -- the cron job that runs `generate.py` (step 8 above) picks up
+  the new code automatically on its next scheduled run.
+- podcast.json, pipeline.json, and feed.xml are untouched by updates unless
+  a specific release note says otherwise -- CLI-only changes (menu wording,
+  new prompts, etc.) never require touching your data.
+
 ## Usage
 
 ```bash
