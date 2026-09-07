@@ -88,6 +88,11 @@ DEFAULT = {
     'outputFormat': 'mp3',
     'workDir': os.path.join(os.path.dirname(__file__), 'pipeline_work'),
     'editorialDir': os.path.join(os.path.dirname(__file__), 'editorial'),
+    # Default folder "Process New Episode" reads audio/artwork from. Blank
+    # means always ask. The source audio/artwork files here are deleted once
+    # they've been converted/copied into ./media/ -- keep your own backup of
+    # originals if you want one.
+    'inputDir': '',
 }
 
 WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']

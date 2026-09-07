@@ -5,6 +5,7 @@ import shutil
 import sys
 import uuid
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import requests
@@ -120,6 +121,28 @@ def divider(title=''):
     print(f'\n── {title} {"─" * max(0, 50 - len(title))}')
 
 
+def parse_rss_pubdate(raw, fallback):
+    """
+    Parse an RSS <pubDate> (RFC 822/2822) into a UTC ISO string.
+    Uses email.utils.parsedate_to_datetime, which covers the format variants
+    real-world feeds use (missing weekday, named timezones like EST/PST, etc.)
+    -- a couple of hand-rolled strptime patterns previously missed most of these
+    and silently fell back to "now", which corrupted episode ordering on import
+    since each failed episode got a slightly later timestamp than the last.
+    If parsing still fails, `fallback` is used for every such episode so at
+    least they don't get scattered out of order relative to each other.
+    """
+    if not raw:
+        return fallback
+    try:
+        dt = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 def parse_pubdate_input(raw):
     """
     Parse a date string entered by the user and return a UTC ISO string.
@@ -193,8 +216,10 @@ def manage_txt_records(existing=None):
             purpose = prompt('Purpose attribute (optional, e.g. "verify")')
             records.append({k: v for k, v in {'value': value, 'purpose': purpose}.items() if v})
         if action == 'Delete record':
-            names = [f'{i+1}. {t["value"]}' for i, t in enumerate(records)]
+            names = [f'{i+1}. {t["value"]}' for i, t in enumerate(records)] + ['Cancel']
             choice = prompt_choice('Delete which?', names)
+            if choice == 'Cancel':
+                continue
             records.pop(int(choice.split('.')[0]) - 1)
 
 
@@ -232,8 +257,10 @@ def manage_podroll(existing=None):
                 continue
             items.append({k: v for k, v in {'feedGuid': feed_guid, 'feedUrl': feed_url}.items() if v})
         if action == 'Delete show':
-            names = [f'{i+1}. {it.get("feedGuid") or it.get("feedUrl")}' for i, it in enumerate(items)]
+            names = [f'{i+1}. {it.get("feedGuid") or it.get("feedUrl")}' for i, it in enumerate(items)] + ['Cancel']
             choice = prompt_choice('Delete which?', names)
+            if choice == 'Cancel':
+                continue
             items.pop(int(choice.split('.')[0]) - 1)
 
 
@@ -332,8 +359,10 @@ def manage_chapters(existing=None):
             chapters.sort(key=lambda c: c['startTime'])
 
         if action == 'Edit chapter':
-            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
+            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)] + ['Cancel']
             choice = prompt_choice('Which chapter?', names)
+            if choice == 'Cancel':
+                continue
             idx = int(choice.split('.')[0]) - 1
             ch = chapters[idx]
             chapters[idx] = {
@@ -346,8 +375,10 @@ def manage_chapters(existing=None):
             chapters.sort(key=lambda c: c['startTime'])
 
         if action == 'Delete chapter':
-            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
+            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)] + ['Cancel']
             choice = prompt_choice('Delete which chapter?', names)
+            if choice == 'Cancel':
+                continue
             idx = int(choice.split('.')[0]) - 1
             chapters.pop(idx)
 
@@ -392,8 +423,10 @@ def manage_persons(existing=None):
             }.items() if v})
 
         if action == 'Delete person':
-            names = [f'{i+1}. {p["name"]}' for i, p in enumerate(persons)]
+            names = [f'{i+1}. {p["name"]}' for i, p in enumerate(persons)] + ['Cancel']
             choice = prompt_choice('Delete which person?', names)
+            if choice == 'Cancel':
+                continue
             idx = int(choice.split('.')[0]) - 1
             persons.pop(idx)
 
@@ -554,8 +587,10 @@ def edit_episode():
         print('\n  No episodes to edit.\n')
         return
 
-    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
+    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes] + ['Cancel']
     choice = prompt_choice('Which episode to edit?', names)
+    if choice == 'Cancel':
+        return
     idx = names.index(choice)
     ep = episodes[idx]
     ep_id = ep['id']
@@ -604,7 +639,9 @@ def edit_episode():
 
         if section.startswith('Title'):
             options = ep.get('titleOptions') or [ep['title']]
-            chosen = prompt_choice('Pick a title', options)
+            chosen = prompt_choice('Pick a title', options + ['Cancel'])
+            if chosen == 'Cancel':
+                return
             store.update_episode(ep_id, {'title': chosen, 'titleChosenIndex': options.index(chosen)})
 
         elif section.startswith('Description'):
@@ -800,8 +837,10 @@ def delete_episode():
         print('\n  No episodes to delete.\n')
         return
 
-    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
+    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes] + ['Cancel']
     choice = prompt_choice('Which episode to delete?', names)
+    if choice == 'Cancel':
+        return
     idx = names.index(choice)
     ep = episodes[idx]
 
@@ -965,6 +1004,10 @@ def import_from_rss():
     # ── Import episodes ───────────────────────────────────────────────────────
     imported = 0
     skipped = 0
+    # Fixed once, up front: used only if a pubDate fails to parse, so episodes
+    # with unparseable dates don't drift out of order relative to each other
+    # as the import loop's wall-clock time advances (see parse_rss_pubdate).
+    fallback_pub_date = datetime.now(timezone.utc).isoformat()
 
     for i, item in enumerate(items, 1):
         title = get(item, 'title') or f'Episode {i}'
@@ -1037,13 +1080,7 @@ def import_from_rss():
         guid = (guid_el.text or '').strip() if guid_el is not None else str(uuid.uuid4())
 
         pub_raw = get(item, 'pubDate')
-        pub_date = datetime.now(timezone.utc).isoformat()
-        for fmt in ('%a, %d %b %Y %H:%M:%S %z', '%a, %d %b %Y %H:%M:%S GMT'):
-            try:
-                pub_date = datetime.strptime(pub_raw, fmt).isoformat()
-                break
-            except Exception:
-                continue
+        pub_date = parse_rss_pubdate(pub_raw, fallback_pub_date)
 
         ep_num_str = get(item, 'episode', 'itunes')
         season_str = get(item, 'season', 'itunes')
@@ -1210,6 +1247,7 @@ def configure_pipeline():
         'Soundbite rules',
         'Waveform video',
         'Recurring publish schedule',
+        'Default input folder',
         'Back'
     ])
     if section == 'Back':
@@ -1224,9 +1262,20 @@ def configure_pipeline():
             config['transcription']['cloud']['model'] = prompt(
                 'Whisper model', config['transcription']['cloud']['model'])
         else:
+            print('''
+  This is the shell command used to run a local Whisper-compatible tool
+  (openai-whisper, whisper.cpp, faster-whisper...) on each episode.
+  Termicast fills in two placeholders when it runs this command:
+    {input}   the audio file to transcribe -- a converted copy Termicast
+              already made, not your original source file directly
+    {outdir}  a scratch folder Termicast creates just for this run and
+              deletes right after -- NOT your media folder. Your command
+              must write "<basename>.vtt" into it; Termicast then copies
+              that .vtt to where it belongs.
+  You only need to change this if your Whisper tool's CLI syntax differs
+  from openai-whisper's. Leave it as-is otherwise.''')
             config['transcription']['local']['command'] = prompt(
-                'Local command template (must use {input} and {outdir}, and write "<basename>.vtt")',
-                config['transcription']['local']['command'])
+                'Local command template', config['transcription']['local']['command'])
         print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
 
     elif section == 'LLM provider (Claude/OpenAI)':
@@ -1275,6 +1324,17 @@ def configure_pipeline():
             print('\n  Reminder: cron must run generate.py at least as often as your slot')
             print('  granularity (e.g. hourly) for episodes to go live promptly. See README.')
 
+    elif section == 'Default input folder':
+        print('''
+  "Process New Episode" asks for a folder holding that episode's audio
+  (WAV/FLAC/MP3) and artwork PNG. Set a default here so it's pre-filled
+  each time (just press Enter to accept it, or type a different path to
+  override for one run). Leave blank to always ask with no default.
+  Note: once the audio/artwork in that folder are converted and copied
+  into ./media/, the originals are deleted from this folder.''')
+        config['inputDir'] = prompt(
+            'Default input folder (blank to always ask)', config.get('inputDir', '')) or ''
+
     pipeline_config.save(config)
     print('\n  Pipeline config saved to pipeline.json.')
 
@@ -1311,9 +1371,13 @@ def _pick_input_files(input_dir):
 
 def process_new_episode_ai():
     divider('Process New Episode (AI Pipeline)')
+    print('  Note: once the source audio/artwork are converted and copied')
+    print('  into ./media/, the originals are deleted from the input folder.\n')
     config = pipeline_config.load()
 
-    input_dir = prompt('Folder containing the episode audio (WAV/FLAC/MP3) and artwork PNG', required=True)
+    input_dir = prompt(
+        'Folder containing the episode audio (WAV/FLAC/MP3) and artwork PNG',
+        config.get('inputDir') or None, required=True)
     if not os.path.isdir(input_dir):
         print(f'\n  Not a folder: {input_dir}\n')
         return
@@ -1407,14 +1471,24 @@ def process_new_episode_ai():
 
     final_audio_filename = f'{prefix}_{slug}.mp3'
     shutil.copyfile(converted_mp3, os.path.join(MEDIA_DIR, final_audio_filename))
+    original_audio_path = os.path.join(input_dir, audio_file)
+    try:
+        os.remove(original_audio_path)
+    except OSError as e:
+        print(f'    Warning: could not delete source audio {original_audio_path}: {e}')
 
     artwork_url = None
     if art_file:
         ext = os.path.splitext(art_file)[1] or '.png'
         artwork_filename = f'{prefix}_{slug}-art{ext}'
-        shutil.copyfile(os.path.join(input_dir, art_file), os.path.join(MEDIA_DIR, artwork_filename))
+        original_art_path = os.path.join(input_dir, art_file)
+        shutil.copyfile(original_art_path, os.path.join(MEDIA_DIR, artwork_filename))
         base_url = store.get_show().get('baseUrl', '').rstrip('/')
         artwork_url = f'{base_url}/media/{artwork_filename}'
+        try:
+            os.remove(original_art_path)
+        except OSError as e:
+            print(f'    Warning: could not delete source artwork {original_art_path}: {e}')
 
     transcript_filename = f'{prefix}_{slug}.vtt'
     shutil.copyfile(vtt_path, os.path.join(MEDIA_DIR, transcript_filename))
