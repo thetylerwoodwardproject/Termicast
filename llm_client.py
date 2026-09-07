@@ -15,6 +15,8 @@ ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 ANTHROPIC_VERSION = '2023-06-01'
 OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 
+_ENV_VAR_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
 
 class LLMError(Exception):
     pass
@@ -24,7 +26,14 @@ def _api_key(env_name):
     import os
     key = os.environ.get(env_name)
     if not key:
-        raise LLMError(f'{env_name} is not set in the environment.')
+        msg = f'{env_name} is not set in the environment.'
+        if not _ENV_VAR_NAME_RE.match(env_name):
+            msg += (" That doesn't look like an environment variable name -- pipeline.json's "
+                     "apiKeyEnv setting looks like it has the API key itself in it instead of "
+                     "the variable name. Run \"Configure AI pipeline\" and enter the name of "
+                     "the environment variable that holds the key (e.g. ANTHROPIC_API_KEY), "
+                     "not the key.")
+        raise LLMError(msg)
     return key
 
 

@@ -8,6 +8,7 @@ Two backends, picked by pipeline.json's transcription.mode:
              command template that must write "<basename>.vtt" into --outdir.
 """
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -20,9 +21,21 @@ OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 PYTORCH_CPU_INDEX_URL = 'https://download.pytorch.org/whl/cpu'
 WHISPER_VENV_DIRNAME = '.venv-whisper'
 
+_ENV_VAR_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
 
 class TranscriptionError(Exception):
     pass
+
+
+def _not_set_error(env_name):
+    msg = f'{env_name} is not set in the environment.'
+    if not _ENV_VAR_NAME_RE.match(env_name):
+        msg += (" That doesn't look like an environment variable name -- pipeline.json's "
+                 "apiKeyEnv setting looks like it has the API key itself in it instead of "
+                 "the variable name. Run \"Configure AI pipeline\" and enter the name of the "
+                 "environment variable that holds the key (e.g. OPENAI_API_KEY), not the key.")
+    return msg
 
 
 def check_ready(config):
@@ -35,7 +48,7 @@ def check_ready(config):
         cfg = config['transcription']['cloud']
         api_key_env = cfg.get('apiKeyEnv', 'OPENAI_API_KEY')
         if not os.environ.get(api_key_env):
-            raise TranscriptionError(f'{api_key_env} is not set in the environment.')
+            raise TranscriptionError(_not_set_error(api_key_env))
     elif mode == 'local':
         cfg = config['transcription']['local']
         cmd_str = cfg['command'].format(input='', outdir='')
@@ -108,11 +121,10 @@ def transcribe_to_vtt(audio_path, config, dest_vtt_path):
 
 def _transcribe_cloud(audio_path, config):
     cfg = config['transcription']['cloud']
-    api_key = os.environ.get(cfg.get('apiKeyEnv', 'OPENAI_API_KEY'))
+    api_key_env = cfg.get('apiKeyEnv', 'OPENAI_API_KEY')
+    api_key = os.environ.get(api_key_env)
     if not api_key:
-        raise TranscriptionError(
-            f'{cfg.get("apiKeyEnv", "OPENAI_API_KEY")} is not set in the environment.'
-        )
+        raise TranscriptionError(_not_set_error(api_key_env))
 
     with open(audio_path, 'rb') as f:
         files = {'file': (os.path.basename(audio_path), f, 'audio/mpeg')}
