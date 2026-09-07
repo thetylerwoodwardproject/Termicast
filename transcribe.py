@@ -11,11 +11,14 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 
 import requests
 
 OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
+PYTORCH_CPU_INDEX_URL = 'https://download.pytorch.org/whl/cpu'
+WHISPER_VENV_DIRNAME = '.venv-whisper'
 
 
 class TranscriptionError(Exception):
@@ -56,10 +59,10 @@ def check_ready(config):
         # traceback after conversion has already run.
         if executable.startswith('python') and len(tokens) >= 3 and tokens[1] == '-m':
             module = tokens[2]
+            interp_path = shutil.which(executable) or executable
             check = subprocess.run([executable, '-c', f'import {module}'],
                                     capture_output=True, text=True)
             if check.returncode != 0:
-                interp_path = shutil.which(executable) or executable
                 raise TranscriptionError(
                     f'"{module}" is not installed for the Python interpreter this command uses '
                     f'({interp_path}).\n'
@@ -67,6 +70,23 @@ def check_ready(config):
                     f'if you installed it for a different Python (a venv, a different python3 '
                     f'version, etc.), point the command template at that interpreter instead via '
                     f'"Configure AI pipeline" > "Transcription (Whisper)".'
+                )
+
+            # PyPI has two unrelated packages both importable as `whisper`:
+            # openai-whisper (speech-to-text, what this command needs) and
+            # Graphite's whisper (a time-series database, `pip install
+            # whisper` with no "openai-" prefix). The latter imports fine but
+            # has no CLI, so `python -m whisper <args>` silently no-ops --
+            # exit 0, no output, no files -- which otherwise looks identical
+            # to a hang or a misconfigured command template.
+            if module == 'whisper' and not whisper_ready_for(executable):
+                raise TranscriptionError(
+                    f'The "whisper" module installed for {interp_path} is not openai-whisper -- '
+                    f'it looks like the unrelated Graphite "whisper" package (a PyPI name collision; '
+                    f'`pip install whisper` installs that one, not this one). It imports fine but has '
+                    f'no transcription CLI, so this command would silently do nothing.\n'
+                    f'  Fix: `{executable} -m pip uninstall whisper && '
+                    f'{executable} -m pip install -U openai-whisper`.'
                 )
     else:
         raise TranscriptionError(f'Unknown transcription mode: {mode}')
@@ -148,3 +168,68 @@ def _transcribe_local(audio_path, config, dest_vtt_path):
         with open(dest_vtt_path, 'w', encoding='utf-8') as f:
             f.write(content)
         return dest_vtt_path
+
+
+def local_command_for(python_exe):
+    """The default local transcription command, pointed at a specific
+    python executable (e.g. a dedicated venv's, from install_local_whisper)."""
+    return (f'{python_exe} -m whisper {{input}} --model base.en --language en '
+            f'--output_format vtt --output_dir {{outdir}}')
+
+
+def whisper_ready_for(python_exe):
+    """True if openai-whisper (not the PyPI-name-colliding Graphite `whisper`
+    package -- see check_ready) is importable and usable by python_exe."""
+    check = subprocess.run(
+        [python_exe, '-c', 'import whisper, sys; sys.exit(0 if hasattr(whisper, "load_model") else 1)'],
+        capture_output=True, text=True)
+    return check.returncode == 0
+
+
+def install_local_whisper(base_dir):
+    """Set up local transcription the low-pain way: a dedicated virtual
+    environment (so no sudo/PEP-668 fights with the system Python, and no
+    risk of the `pip install whisper` name collision) with the CPU-only
+    PyTorch build (so it doesn't pull multi-GB CUDA/GPU packages a typical
+    server has no use for), then openai-whisper on top.
+
+    No-ops if that venv already has a working openai-whisper. Streams the
+    installer's own output straight to the terminal, since these are large,
+    slow downloads a user should be able to watch progress on. Returns the
+    venv's python executable path. Raises TranscriptionError on failure.
+    """
+    venv_dir = os.path.join(base_dir, WHISPER_VENV_DIRNAME)
+    python_exe = os.path.join(venv_dir, 'bin', 'python3')
+
+    if os.path.isfile(python_exe) and whisper_ready_for(python_exe):
+        print(f'  openai-whisper is already installed and working in {venv_dir}.')
+        return python_exe
+
+    if not os.path.isfile(python_exe):
+        print(f'  Creating virtual environment at {venv_dir} ...')
+        proc = subprocess.run([sys.executable, '-m', 'venv', venv_dir])
+        if proc.returncode != 0 or not os.path.isfile(python_exe):
+            raise TranscriptionError(
+                f'Failed to create virtual environment at {venv_dir} (see output above). '
+                f'On Debian/Ubuntu this usually means the `python3-venv` package isn\'t '
+                f'installed -- try `sudo apt install python3-venv` and retry.'
+            )
+
+    print('  Installing CPU-only PyTorch (avoids pulling multi-GB CUDA/GPU packages '
+          'a typical server has no use for) ...')
+    proc = subprocess.run([python_exe, '-m', 'pip', 'install', '-q',
+                            'torch', '--index-url', PYTORCH_CPU_INDEX_URL])
+    if proc.returncode != 0:
+        raise TranscriptionError('Failed to install PyTorch (CPU build); see output above.')
+
+    print('  Installing openai-whisper ...')
+    proc = subprocess.run([python_exe, '-m', 'pip', 'install', '-q', '-U', 'openai-whisper'])
+    if proc.returncode != 0:
+        raise TranscriptionError('Failed to install openai-whisper; see output above.')
+
+    if not whisper_ready_for(python_exe):
+        raise TranscriptionError(
+            'openai-whisper installed but still doesn\'t look usable afterward -- something '
+            'went wrong. Check the install output above.'
+        )
+    return python_exe
