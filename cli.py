@@ -42,24 +42,6 @@ def prompt(message, default=None, required=False):
         return val or None
 
 
-_ENV_VAR_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-
-
-def prompt_env_var(message, default=None):
-    """Like prompt(), but for "which env var holds your API key" questions --
-    rejects values that look like a pasted secret (e.g. 'sk-ant-...') rather
-    than an environment variable name, which otherwise fails confusingly at
-    run time with the key itself in the "not set" error message."""
-    while True:
-        val = prompt(message, default, required=True)
-        if _ENV_VAR_NAME_RE.match(val):
-            return val
-        print(f"    '{val}' doesn't look like an environment variable name -- "
-              'it looks like the key itself. Enter the *name* of the '
-              'environment variable that holds the key (e.g. ANTHROPIC_API_KEY), '
-              'not the key value.')
-
-
 def prompt_bool(message, default=True):
     yn = 'Y/n' if default else 'y/N'
     val = input(f'  {message} [{yn}]: ').strip().lower()
@@ -1263,8 +1245,7 @@ def _configure_transcription(config):
     mode = prompt_choice('Mode', ['local', 'cloud'], config['transcription']['mode'])
     config['transcription']['mode'] = mode
     if mode == 'cloud':
-        config['transcription']['cloud']['apiKeyEnv'] = prompt_env_var(
-            'Env var holding the OpenAI API key', config['transcription']['cloud']['apiKeyEnv'])
+        config['transcription']['cloud']['apiKeyEnv'] = 'OPENAI_API_KEY'
         config['transcription']['cloud']['model'] = prompt(
             'Whisper model', config['transcription']['cloud']['model'])
     else:
@@ -1299,7 +1280,9 @@ def _configure_transcription(config):
   from openai-whisper's. Leave it as-is otherwise.''')
             config['transcription']['local']['command'] = prompt(
                 'Local command template', config['transcription']['local']['command'])
-    print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
+    if mode == 'cloud':
+        print('\n  Reads the key from the OPENAI_API_KEY environment variable at run time -- '
+              'never stored in pipeline.json.')
 
 
 def _configure_llm(config):
@@ -1309,14 +1292,14 @@ def _configure_llm(config):
     provider = prompt_choice('Provider', ['claude', 'openai'], config['llm']['provider'])
     config['llm']['provider'] = provider
     if provider == 'claude':
-        config['llm']['claude']['apiKeyEnv'] = prompt_env_var(
-            'Env var holding the Anthropic API key', config['llm']['claude']['apiKeyEnv'])
+        config['llm']['claude']['apiKeyEnv'] = 'ANTHROPIC_API_KEY'
         config['llm']['claude']['model'] = prompt('Claude model', config['llm']['claude']['model'])
+        key_env = 'ANTHROPIC_API_KEY'
     else:
-        config['llm']['openai']['apiKeyEnv'] = prompt_env_var(
-            'Env var holding the OpenAI API key', config['llm']['openai']['apiKeyEnv'])
+        config['llm']['openai']['apiKeyEnv'] = 'OPENAI_API_KEY'
         config['llm']['openai']['model'] = prompt('OpenAI model', config['llm']['openai']['model'])
-    print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
+        key_env = 'OPENAI_API_KEY'
+    print(f'\n  Reads the key from the {key_env} environment variable at run time -- never stored in pipeline.json.')
 
 
 def _configure_prompts(config):
