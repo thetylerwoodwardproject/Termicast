@@ -172,7 +172,7 @@ def generate_feed():
     if show.get('subtitle'):
         L.append(f'  <itunes:subtitle>{x(strip_html(show["subtitle"]))}</itunes:subtitle>')
 
-    L.append(f'  <itunes:type>episodic</itunes:type>')
+    L.append(f'  <itunes:type>{x(show.get("itunesType", "episodic"))}</itunes:type>')
     L.append(f'  <itunes:explicit>{"true" if show.get("explicit") else "false"}</itunes:explicit>')
 
     if show.get('description'):
@@ -240,6 +240,10 @@ def generate_feed():
                     attrs += f' {key}="{xa(r[key])}"'
             L.append(f'    <podcast:valueRecipient{attrs}/>')
         L.append('  </podcast:value>')
+
+    for txt in show.get('txt', []):
+        purpose = f' purpose="{xa(txt["purpose"])}"' if txt.get('purpose') else ''
+        L.append(f'  <podcast:txt{purpose}>{x(txt["value"])}</podcast:txt>')
 
     if show.get('podroll'):
         L.append('  <podcast:podroll>')
@@ -318,6 +322,14 @@ def generate_feed():
             os.makedirs(os.path.dirname(chap_file), exist_ok=True)
             with open(chap_file, 'w', encoding='utf-8') as f:
                 json.dump(build_chapters_json(ep['chapters']), f, indent=2)
+
+        # 'soundbites' (plural, list) is written by the AI pipeline and can hold
+        # several clips per episode; 'soundbite' (singular) is the original
+        # manually-entered single tag. Both may emit -- podcast:soundbite is
+        # repeatable per the Podcast Index spec.
+        for sb in ep.get('soundbites', []):
+            title_attr = f' title="{xa(sb["title"])}"' if sb.get('title') else ''
+            L.append(f'    <podcast:soundbite startTime="{sb["startTime"]}" duration="{sb["duration"]}"{title_attr}/>')
 
         if ep.get('soundbite'):
             sb = ep['soundbite']

@@ -14,7 +14,12 @@ static feed.xml that nginx serves directly.
 - Python 3.8+
 - nginx
 - certbot
-- `pip3 install requests` (only needed for the RSS import feature)
+- `pip3 install -r requirements.txt` (`requests` for RSS import/mirroring;
+  `Pillow` for the AI pipeline's soundbite waveform videos)
+- `ffmpeg` + `ffprobe` (only needed for the AI pipeline: audio conversion,
+  soundbite clip extraction, and waveform video rendering)
+- A local Whisper install (e.g. `pip3 install openai-whisper`, or
+  whisper.cpp) if you use local transcription instead of the OpenAI cloud API
 
 ## Setup
 
@@ -158,6 +163,89 @@ python3 generate.py
 
 ---
 
+## AI Episode Pipeline
+
+There are three ways to get an episode into your feed, and none of them
+replace each other -- pick whichever fits a given episode:
+
+1. **Add episode** -- fully manual, described above.
+2. **Process new episode (AI pipeline)** -- described in this section:
+   drop raw audio + artwork in a folder, and Whisper + Claude/OpenAI generate
+   everything else.
+3. **Mirror / Promote** -- adopting another host's feed verbatim, described
+   below.
+
+### How it works
+
+1. Drop your episode's WAV/FLAC/MP3 and a PNG artwork file into a folder
+   (nothing else needs to be in there).
+2. Run `python3 cli.py` -> "Process new episode (AI pipeline)" and point it
+   at that folder. It will:
+   - Convert the audio to MP3 (the only output format Termicast publishes).
+   - Transcribe the full episode to VTT with Whisper (cloud or local,
+     depending on your config).
+   - Ask Claude or OpenAI to generate 3 titles (you pick the best one), an
+     SEO-ready HTML description, 10 keywords, chapter names with start/end
+     times, and up to 5 soundbite-worthy moments.
+   - Cut each soundbite to its own MP3, and render a matching MP4: a
+     1080x1920 (9:16) video with a solid RED/GREEN/BLUE background (for
+     chroma-keying over other footage in Canva for Shorts/Reels/TikTok) and
+     a thin, centered, hand-drawn-looking waveform line that reacts to the
+     clip's audio -- flat during silence, pulsing organically with speech.
+   - Generate 3 social media posts (280 chars + hashtags).
+   - Schedule the episode -- either at a date/time you enter, or
+     automatically on your configured recurring weekly slot (see below).
+   - Add the episode to podcast.json and regenerate feed.xml.
+   - Write an editorial markdown file with everything generated, named
+     `YYMMDD_Episode-Title.md`, into `./editorial/`.
+
+### Configuring the pipeline
+
+Run "Configure AI pipeline" in the CLI, or edit `pipeline.json` directly.
+It controls:
+
+- **Transcription**: `cloud` (OpenAI's hosted Whisper API) or `local` (a
+  command template you provide for whisper.cpp / openai-whisper / etc, run
+  on this server).
+- **LLM provider**: `claude` or `openai`, plus which model to use.
+- **Prompts**: the tone/style instructions sent to the LLM for titles,
+  description, keywords, chapters, soundbites, and social posts -- edit
+  these to match your show's voice and any house rules.
+- **Soundbite rules**: how many to generate, min/max clip length, and the
+  maximum *combined* length across all of them (default 5 clips, 180s total).
+- **Waveform video**: RED/GREEN/BLUE background, the waveform's hex color,
+  resolution/fps, or turn video generation off entirely (MP3-only soundbites).
+- **Recurring publish schedule**: e.g. "every Tuesday at 05:00 UTC" -- when
+  enabled, newly processed episodes are automatically queued onto the next
+  open weekly slot instead of asking for a date each time. Batch-processing
+  several episodes in a row spreads them one-per-week automatically.
+
+API keys are **never** stored in pipeline.json -- only the *name* of the
+environment variable to read them from (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY` by default). Export them in your shell/systemd unit/crontab
+before running the pipeline.
+
+### Recurring schedule + cron
+
+The recurring slot feature decides *which* future date/time a processed
+episode gets; the existing `generate.py` cron job (see step 8 of Setup)
+is what actually flips it live once that time arrives. If you're using a
+tight recurring slot (e.g. "Tuesday at 05:00"), run cron hourly rather than
+daily so episodes go live promptly instead of waiting for the next daily run:
+
+```
+0 * * * * cd /opt/termicast && python3 generate.py >> /var/log/termicast.log 2>&1
+```
+
+### Editing a processed episode
+
+"Edit processed episode (AI pipeline)" lists episodes that went through the
+pipeline and lets you redo any single piece -- pick a different generated
+title, regenerate the description/keywords/chapters/soundbites/social posts,
+or just refresh the editorial markdown file after a manual tweak. This is
+separate from "Edit episode" (the manual editor), which still works on any
+episode regardless of how it was created.
+
 ## Chapters
 
 Chapters follow the [Podcast Index JSON format](https://github.com/Podcast-Index-org/podcast-namespace/blob/master/chapters/jsonChapters.md).
@@ -274,6 +362,28 @@ enable it during the setup wizard. Stats appear at
 
 You can disable OP3 by clearing the `op3Prefix` field in "Edit show settings".
 
+## Advanced Podcast 2.0 settings
+
+"Advanced Podcast 2.0 settings" in the CLI covers the show-level tags that
+aren't part of the basic setup wizard:
+
+- **Lock/Unlock** (`podcast:locked`) -- lock your feed once you're settled
+  on this host to prevent another platform from importing/claiming it;
+  unlock temporarily if you're migrating hosts.
+- **TXT records** (`podcast:txt`) -- arbitrary domain-verification or other
+  strings, with an optional `purpose` attribute.
+- **Funding URL** (`podcast:funding`) -- a support/funding link and button text.
+- **Podroll** (`podcast:podroll`) -- recommend other shows by their Podcast
+  Index `feedGuid` (look it up at podcastindex.org) and/or `feedUrl`. The
+  CLI walks you through it; 8 entries is a practical sane limit.
+- **Creator location** (`podcast:location`) -- where the show is produced.
+
+Standard iTunes/Apple Podcasts ("podcast 1.0") tags -- title, author,
+subtitle, summary, explicit, artwork, categories, owner, type
+(episodic/serial, set in "Edit show settings"), duration, episode/season
+numbers, and episode type -- are all emitted automatically and don't need
+separate configuration.
+
 ---
 
 ## File structure
@@ -286,10 +396,20 @@ termicast/
   mirror.py           # Cron script -- verbatim mirror of an external feed
   promote.py          # Adopt the mirror as the primary feed (failover)
   store.py            # JSON data layer
+  pipeline_config.py  # AI pipeline config (pipeline.json) load/save/defaults
+  transcribe.py       # Whisper transcription (cloud API or local shell-out)
+  llm_client.py       # Claude/OpenAI text generation for episode metadata
+  audio_tools.py      # ffmpeg conversion/clipping + waveform video rendering
+  pipeline.py         # AI pipeline helpers: scheduling, slugs, editorial .md
+  vtt_utils.py        # Minimal WebVTT parsing shared by the pipeline
   mirror/             # Mirrored feed.xml + downloaded assets (auto-created)
+  editorial/          # Per-episode .md files from the AI pipeline (auto-created)
+  pipeline_work/      # Scratch dir for in-progress AI pipeline runs (auto-created)
   podcast.json        # Episode database (auto-created on first run)
+  pipeline.json       # AI pipeline config (auto-created on first use)
   feed.xml            # Generated RSS feed (symlinked into /var/www/html)
-  media/              # Audio files, transcripts, chapter JSON
+  media/              # Audio files, transcripts, chapter JSON, soundbites
+  requirements.txt    # Python dependencies (requests, Pillow)
   nginx.conf.example  # Reference nginx config
   README.md
 ```

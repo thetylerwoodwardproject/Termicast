@@ -7,3 +7,6 @@ podcast.json
 feed.xml
 media/
 mirror/
+pipeline.json
+pipeline_work/
+editorial/
