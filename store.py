@@ -17,7 +17,11 @@ DEFAULT = {
         'link': '',
         'baseUrl': '',
         'op3Prefix': 'https://op3.dev/e/',
-        'guid': ''
+        'guid': '',
+        'itunesType': 'episodic',
+        'locked': 'no',
+        'txt': [],
+        'podroll': []
     },
     'episodes': []
 }

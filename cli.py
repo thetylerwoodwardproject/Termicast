@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shutil
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -11,6 +12,12 @@ import xml.etree.ElementTree as ET
 
 import store
 import feed as feedgen
+import pipeline_config
+import pipeline as pipelinegen
+import transcribe
+import llm_client
+import audio_tools
+import vtt_utils
 
 MEDIA_DIR = os.path.join(os.path.dirname(__file__), 'media')
 os.makedirs(MEDIA_DIR, exist_ok=True)
@@ -149,6 +156,7 @@ def setup_show():
     updates['subcategory'] = prompt('Subcategory (optional)', show.get('subcategory'))
     updates['language'] = prompt('Language code', show.get('language', 'en'))
     updates['explicit'] = prompt_bool('Explicit content?', show.get('explicit', False))
+    updates['itunesType'] = prompt_choice('Show type', ['episodic', 'serial'], show.get('itunesType', 'episodic'))
 
     if not show.get('guid'):
         updates['guid'] = str(uuid.uuid4())
@@ -157,6 +165,128 @@ def setup_show():
     updates = {k: v for k, v in updates.items() if v is not None}
     store.save_show(updates)
     print('\n  Show settings saved.')
+    regenerate()
+
+
+# ─── Advanced Podcast 2.0 settings ────────────────────────────────────────────
+
+def manage_txt_records(existing=None):
+    records = list(existing or [])
+    while True:
+        divider('podcast:txt records')
+        if not records:
+            print('  None yet.\n')
+        else:
+            for i, t in enumerate(records, 1):
+                purpose = f' (purpose={t["purpose"]})' if t.get('purpose') else ''
+                print(f'  {i}. {t["value"]}{purpose}')
+            print()
+        choices = ['Add record']
+        if records:
+            choices.append('Delete record')
+        choices.append('Done')
+        action = prompt_choice('podcast:txt', choices)
+        if action == 'Done':
+            return records
+        if action == 'Add record':
+            value = prompt('Value (e.g. a domain verification string)', required=True)
+            purpose = prompt('Purpose attribute (optional, e.g. "verify")')
+            records.append({k: v for k, v in {'value': value, 'purpose': purpose}.items() if v})
+        if action == 'Delete record':
+            names = [f'{i+1}. {t["value"]}' for i, t in enumerate(records)]
+            choice = prompt_choice('Delete which?', names)
+            records.pop(int(choice.split('.')[0]) - 1)
+
+
+def manage_podroll(existing=None):
+    items = list(existing or [])
+    print('''
+  podcast:podroll recommends other shows to your listeners (Podcast Index
+  calls each entry a "remoteItem"). For each show you want to recommend you
+  need its Podcast Index feedGuid (podcast:guid from that show's own feed)
+  and/or its feedUrl. Look shows up at https://podcastindex.org to find
+  their feedGuid. Apple Podcasts and other 2.0 apps show these as "You may
+  also like" style recommendations. Up to 8 is a sane practical limit.''')
+    while True:
+        divider('Podroll')
+        if not items:
+            print('  No podroll entries yet.\n')
+        else:
+            for i, it in enumerate(items, 1):
+                print(f'  {i}. feedGuid={it.get("feedGuid", "-")}  feedUrl={it.get("feedUrl", "-")}')
+            print()
+        choices = []
+        if len(items) < 8:
+            choices.append('Add show')
+        if items:
+            choices.append('Delete show')
+        choices.append('Done')
+        action = prompt_choice('Podroll', choices)
+        if action == 'Done':
+            return items
+        if action == 'Add show':
+            feed_guid = prompt('feedGuid (from podcastindex.org, optional if you have feedUrl)')
+            feed_url = prompt('feedUrl (the other show\'s RSS URL, optional if you have feedGuid)')
+            if not feed_guid and not feed_url:
+                print('    Need at least one of feedGuid or feedUrl.')
+                continue
+            items.append({k: v for k, v in {'feedGuid': feed_guid, 'feedUrl': feed_url}.items() if v})
+        if action == 'Delete show':
+            names = [f'{i+1}. {it.get("feedGuid") or it.get("feedUrl")}' for i, it in enumerate(items)]
+            choice = prompt_choice('Delete which?', names)
+            items.pop(int(choice.split('.')[0]) - 1)
+
+
+def advanced_podcast2_settings():
+    divider('Advanced Podcast 2.0 Settings')
+    show = store.get_show()
+
+    section = prompt_choice('What do you want to configure?', [
+        'Lock/Unlock feed',
+        'TXT records',
+        'Funding URL',
+        'Podroll',
+        'Creator location',
+        'Back'
+    ])
+
+    if section == 'Back':
+        return
+
+    if section == 'Lock/Unlock feed':
+        print('''
+  podcast:locked tells other hosting platforms whether they're allowed to
+  import this feed and claim ownership. Lock it once you're settled on this
+  host; unlock it temporarily if you need to migrate to a different host
+  (locking is the default recommendation to prevent feed theft).''')
+        locked = prompt_choice('Locked?', ['yes', 'no'], show.get('locked', 'no'))
+        owner = prompt('Owner email shown on the lock tag (optional)', show.get('lockedOwner', ''))
+        store.save_show({'locked': locked, 'lockedOwner': owner or None})
+
+    elif section == 'TXT records':
+        records = manage_txt_records(show.get('txt', []))
+        store.save_show({'txt': records})
+
+    elif section == 'Funding URL':
+        current = show.get('funding', {})
+        url = prompt('Funding URL', current.get('url', ''), required=True)
+        text = prompt('Funding button text', current.get('text', 'Support the show'))
+        store.save_show({'funding': {'url': url, 'text': text}})
+
+    elif section == 'Podroll':
+        items = manage_podroll(show.get('podroll', []))
+        store.save_show({'podroll': items})
+
+    elif section == 'Creator location':
+        current = show.get('location', {})
+        name = prompt('Location name (e.g. "Austin, TX")', current.get('name', ''), required=True)
+        geo = prompt('Geo URI (e.g. geo:30.2672,97.7431, optional)', current.get('geo', ''))
+        osm = prompt('OSM identifier (e.g. R113314, optional)', current.get('osm', ''))
+        store.save_show({'location': {k: v for k, v in {
+            'name': name, 'geo': geo or None, 'osm': osm or None
+        }.items() if v}})
+
+    print('\n  Saved.')
     regenerate()
 
 
@@ -940,6 +1070,419 @@ def mirror_menu():
             print('\n  Mirror removed. Delete ./mirror/ manually if you want the files gone.\n')
 
 
+# ─── AI pipeline: config wizard ───────────────────────────────────────────────
+
+def configure_pipeline():
+    divider('Configure AI Pipeline')
+    config = pipeline_config.load()
+
+    section = prompt_choice('What do you want to configure?', [
+        'Transcription (Whisper)',
+        'LLM provider (Claude/OpenAI)',
+        'Prompts / tone',
+        'Soundbite rules',
+        'Waveform video',
+        'Recurring publish schedule',
+        'Back'
+    ])
+    if section == 'Back':
+        return
+
+    if section == 'Transcription (Whisper)':
+        mode = prompt_choice('Mode', ['cloud', 'local'], config['transcription']['mode'])
+        config['transcription']['mode'] = mode
+        if mode == 'cloud':
+            config['transcription']['cloud']['apiKeyEnv'] = prompt(
+                'Env var holding the OpenAI API key', config['transcription']['cloud']['apiKeyEnv'])
+            config['transcription']['cloud']['model'] = prompt(
+                'Whisper model', config['transcription']['cloud']['model'])
+        else:
+            config['transcription']['local']['command'] = prompt(
+                'Local command template (must use {input} and {outdir}, and write "<basename>.vtt")',
+                config['transcription']['local']['command'])
+        print('\n  API keys are read from environment variables at run time -- never stored in pipeline.json.')
+
+    elif section == 'LLM provider (Claude/OpenAI)':
+        provider = prompt_choice('Provider', ['claude', 'openai'], config['llm']['provider'])
+        config['llm']['provider'] = provider
+        if provider == 'claude':
+            config['llm']['claude']['apiKeyEnv'] = prompt(
+                'Env var holding the Anthropic API key', config['llm']['claude']['apiKeyEnv'])
+            config['llm']['claude']['model'] = prompt('Claude model', config['llm']['claude']['model'])
+        else:
+            config['llm']['openai']['apiKeyEnv'] = prompt(
+                'Env var holding the OpenAI API key', config['llm']['openai']['apiKeyEnv'])
+            config['llm']['openai']['model'] = prompt('OpenAI model', config['llm']['openai']['model'])
+
+    elif section == 'Prompts / tone':
+        print('  These instructions are sent to the LLM for each generation step.')
+        print('  Enter new text for each, or press Enter to keep the current instructions.\n')
+        for key in ('tone', 'titles', 'description', 'keywords', 'chapters', 'soundbites', 'socialPosts'):
+            config['prompts'][key] = prompt(key, config['prompts'][key])
+
+    elif section == 'Soundbite rules':
+        sb = config['soundbites']
+        sb['count'] = int(prompt('Number of soundbites to generate', str(sb['count'])))
+        sb['minDurationSeconds'] = float(prompt('Minimum clip length (seconds)', str(sb['minDurationSeconds'])))
+        sb['maxDurationSeconds'] = float(prompt('Maximum clip length (seconds)', str(sb['maxDurationSeconds'])))
+        sb['maxTotalDurationSeconds'] = float(prompt(
+            'Maximum combined length of all soundbites (seconds)', str(sb['maxTotalDurationSeconds'])))
+        sb['titleMaxChars'] = int(prompt('Max soundbite title length (chars)', str(sb['titleMaxChars'])))
+
+    elif section == 'Waveform video':
+        v = config['video']
+        v['enabled'] = prompt_bool('Generate waveform MP4s for soundbites?', v['enabled'])
+        if v['enabled']:
+            v['bgColor'] = prompt_choice(
+                'Background color (solid, for chroma-key compositing in Canva)',
+                ['RED', 'GREEN', 'BLUE'], v['bgColor'])
+            v['waveformColorHex'] = prompt('Waveform line color (hex, e.g. #FF4500)', v['waveformColorHex'])
+            v['fps'] = int(prompt('Frames per second', str(v['fps'])))
+
+    elif section == 'Recurring publish schedule':
+        r = config['schedule']['recurring']
+        r['enabled'] = prompt_bool('Auto-schedule processed episodes on a recurring weekly slot?', r['enabled'])
+        if r['enabled']:
+            r['dayOfWeek'] = prompt_choice('Day of week', pipeline_config.WEEKDAYS, r['dayOfWeek'])
+            r['time'] = prompt('Time (HH:MM, 24h, UTC)', r['time'])
+            print('\n  Reminder: cron must run generate.py at least as often as your slot')
+            print('  granularity (e.g. hourly) for episodes to go live promptly. See README.')
+
+    pipeline_config.save(config)
+    print('\n  Pipeline config saved to pipeline.json.')
+
+
+# ─── AI pipeline: process a new episode ───────────────────────────────────────
+
+AUDIO_INPUT_EXTS = ('.wav', '.flac', '.mp3')
+
+
+def _pick_input_files(input_dir):
+    """Find the audio file and (optional) PNG artwork in an episode's input folder."""
+    entries = os.listdir(input_dir)
+    audio_files = sorted(f for f in entries if f.lower().endswith(AUDIO_INPUT_EXTS))
+    art_files = sorted(f for f in entries if f.lower().endswith('.png'))
+
+    if not audio_files:
+        print(f'    No WAV/FLAC/MP3 file found in {input_dir}')
+        return None, None
+    if len(audio_files) > 1:
+        audio_file = prompt_choice('Multiple audio files found, which one?', audio_files)
+    else:
+        audio_file = audio_files[0]
+
+    art_file = None
+    if len(art_files) > 1:
+        art_file = prompt_choice('Multiple PNG files found, which is the artwork?', art_files)
+    elif art_files:
+        art_file = art_files[0]
+    else:
+        print('    No PNG artwork found -- continuing without episode artwork.')
+
+    return audio_file, art_file
+
+
+def process_new_episode_ai():
+    divider('Process New Episode (AI Pipeline)')
+    config = pipeline_config.load()
+
+    input_dir = prompt('Folder containing the episode audio (WAV/FLAC/MP3) and artwork PNG', required=True)
+    if not os.path.isdir(input_dir):
+        print(f'\n  Not a folder: {input_dir}\n')
+        return
+
+    audio_file, art_file = _pick_input_files(input_dir)
+    if not audio_file:
+        return
+
+    ep_id = str(uuid.uuid4())
+    work_dir = os.path.join(config['workDir'], ep_id)
+    os.makedirs(work_dir, exist_ok=True)
+
+    print('\n  [1/7] Converting audio to MP3...')
+    converted_mp3 = os.path.join(work_dir, 'episode.mp3')
+    try:
+        audio_tools.convert_audio(os.path.join(input_dir, audio_file), converted_mp3)
+    except audio_tools.AudioToolsError as e:
+        print(f'\n  Audio conversion failed: {e}\n')
+        return
+
+    print('  [2/7] Transcribing (this can take a while for a full episode)...')
+    vtt_path = os.path.join(work_dir, 'transcript.vtt')
+    try:
+        transcribe.transcribe_to_vtt(converted_mp3, config, vtt_path)
+    except transcribe.TranscriptionError as e:
+        print(f'\n  Transcription failed: {e}\n')
+        return
+
+    cues = vtt_utils.parse_vtt(vtt_path)
+    if not cues:
+        print('\n  Transcript came back empty, aborting.\n')
+        return
+    transcript_text = vtt_utils.full_text(cues)
+    transcript_ts = vtt_utils.transcript_with_timestamps(cues)
+    total_duration = vtt_utils.duration(cues) or audio_tools.ffprobe_duration(converted_mp3)
+
+    print('  [3/7] Generating titles, description, and keywords...')
+    try:
+        titles = llm_client.generate_titles(transcript_text, config)
+        chosen_title = prompt_choice('Pick the best title', titles)
+        chosen_idx = titles.index(chosen_title)
+
+        description = llm_client.generate_description(transcript_text, chosen_title, config)
+        description = prompt_description(description)
+
+        keywords = llm_client.generate_keywords(transcript_text, config)
+    except llm_client.LLMError as e:
+        print(f'\n  LLM generation failed: {e}\n')
+        return
+
+    print('  [4/7] Generating chapters...')
+    try:
+        chapters = llm_client.generate_chapters(transcript_ts, config)
+    except llm_client.LLMError as e:
+        print(f'    Chapter generation failed, continuing without chapters: {e}')
+        chapters = []
+    for ch in chapters:
+        if ch.get('endTime') and ch['endTime'] > total_duration:
+            ch['endTime'] = total_duration
+
+    print('  [5/7] Selecting and rendering soundbites...')
+    sb_cfg = config['soundbites']
+    try:
+        candidates = llm_client.generate_soundbites(
+            transcript_ts, sb_cfg['count'], sb_cfg['minDurationSeconds'], sb_cfg['maxDurationSeconds'], config)
+    except llm_client.LLMError as e:
+        print(f'    Soundbite selection failed, continuing without soundbites: {e}')
+        candidates = []
+    soundbites = pipelinegen.finalize_soundbites(candidates, total_duration, sb_cfg)
+
+    # Determine publish date before finalizing filenames (they're date-prefixed)
+    sched = config['schedule']['recurring']
+    pub_date = None
+    if sched.get('enabled'):
+        existing_pubdates = [e['pubDate'] for e in store.get_episodes()]
+        slot = pipelinegen.next_recurring_slot(config, existing_pubdates)
+        print(f'\n  Next recurring slot: {format_date(slot)}')
+        if prompt_bool('Use this date?', True):
+            pub_date = slot
+    if pub_date is None:
+        while True:
+            pub_raw = prompt('Publish date/time (e.g. 2026-06-01 08:00)', required=True)
+            try:
+                pub_date = parse_pubdate_input(pub_raw)
+                break
+            except ValueError:
+                print('    Invalid date format. Try: 2026-06-01 08:00')
+
+    prefix = pipelinegen.date_prefix(pub_date)
+    slug = pipelinegen.slugify(chosen_title, max_len=60)
+
+    final_audio_filename = f'{prefix}_{slug}.mp3'
+    shutil.copyfile(converted_mp3, os.path.join(MEDIA_DIR, final_audio_filename))
+
+    artwork_url = None
+    if art_file:
+        ext = os.path.splitext(art_file)[1] or '.png'
+        artwork_filename = f'{prefix}_{slug}-art{ext}'
+        shutil.copyfile(os.path.join(input_dir, art_file), os.path.join(MEDIA_DIR, artwork_filename))
+        base_url = store.get_show().get('baseUrl', '').rstrip('/')
+        artwork_url = f'{base_url}/media/{artwork_filename}'
+
+    transcript_filename = f'{prefix}_{slug}.vtt'
+    shutil.copyfile(vtt_path, os.path.join(MEDIA_DIR, transcript_filename))
+
+    final_audio_path = os.path.join(MEDIA_DIR, final_audio_filename)
+    for sb in soundbites:
+        sb_slug = pipelinegen.slugify(sb['title'], max_len=60)
+        mp3_filename = f'{prefix}_{sb_slug}.mp3'
+        mp4_filename = f'{prefix}_{sb_slug}.mp4'
+        print(f'    Extracting soundbite: {sb["title"]}')
+        audio_tools.extract_clip(final_audio_path, os.path.join(MEDIA_DIR, mp3_filename),
+                                  sb['startTime'], sb['endTime'])
+        sb['mp3'] = mp3_filename
+        sb['caption'] = vtt_utils.text_between(cues, sb['startTime'], sb['endTime'])
+
+        sb['mp4'] = None
+        if config['video'].get('enabled', True):
+            print(f'    Rendering waveform video for: {sb["title"]}')
+            try:
+                audio_tools.render_waveform_video(
+                    os.path.join(MEDIA_DIR, mp3_filename), os.path.join(MEDIA_DIR, mp4_filename), config['video'])
+                sb['mp4'] = mp4_filename
+            except audio_tools.AudioToolsError as e:
+                print(f'      Video render failed, keeping the MP3 only: {e}')
+
+    print('  [6/7] Generating social media posts...')
+    try:
+        social_posts = llm_client.generate_social_posts(
+            transcript_text, chosen_title, feedgen.strip_html(description), config)
+    except llm_client.LLMError as e:
+        print(f'    Social post generation failed, continuing without them: {e}')
+        social_posts = []
+
+    print('  [7/7] Saving episode and writing editorial file...')
+    episode = {
+        'id': ep_id,
+        'guid': str(uuid.uuid4()),
+        'title': chosen_title,
+        'description': description,
+        'filename': final_audio_filename,
+        'pubDate': pub_date,
+        'episodeType': 'full',
+        'explicit': False,
+        'transcript': transcript_filename,
+        'duration': str(int(total_duration)),
+        'filesize': filesize(final_audio_path),
+        'artwork': artwork_url,
+        'chapters': chapters,
+        'keywords': keywords,
+        'titleOptions': titles,
+        'titleChosenIndex': chosen_idx,
+        'soundbites': soundbites,
+        'socialPosts': social_posts,
+        'pipelineMeta': {
+            'sourceAudio': audio_file,
+            'generatedAt': datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    store.add_episode(episode)
+    md_path = pipelinegen.write_editorial_markdown(episode, config)
+    store.update_episode(ep_id, {'pipelineMeta': {**episode['pipelineMeta'], 'mdFile': md_path}})
+
+    print(f'\n  Episode processed: {chosen_title}')
+    print(f'  Scheduled for:     {format_date(pub_date)}')
+    print(f'  Soundbites:        {len(soundbites)}')
+    print(f'  Editorial file:    {md_path}')
+    regenerate()
+
+
+# ─── AI pipeline: edit a processed episode ────────────────────────────────────
+
+def edit_processed_episode_ai():
+    episodes = [e for e in store.get_episodes() if e.get('pipelineMeta')]
+    if not episodes:
+        print('\n  No AI-pipeline-processed episodes yet.\n')
+        return
+
+    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
+    choice = prompt_choice('Which processed episode?', names)
+    ep = episodes[names.index(choice)]
+    ep_id = ep['id']
+    config = pipeline_config.load()
+
+    transcript_path = os.path.join(MEDIA_DIR, ep['transcript']) if ep.get('transcript') else None
+    cues = vtt_utils.parse_vtt(transcript_path) if transcript_path and os.path.isfile(transcript_path) else []
+    transcript_text = vtt_utils.full_text(cues)
+    transcript_ts = vtt_utils.transcript_with_timestamps(cues)
+
+    section = prompt_choice('What do you want to redo?', [
+        'Title (pick a different generated option)',
+        'Description (regenerate via AI)',
+        'Keywords (regenerate via AI)',
+        'Chapters (regenerate via AI)',
+        'Soundbites (regenerate via AI)',
+        'Social posts (regenerate via AI)',
+        'Regenerate editorial file only',
+        'Back'
+    ])
+    if section == 'Back':
+        return
+
+    if section.startswith('Title'):
+        options = ep.get('titleOptions') or [ep['title']]
+        chosen = prompt_choice('Pick a title', options)
+        store.update_episode(ep_id, {'title': chosen, 'titleChosenIndex': options.index(chosen)})
+
+    elif section.startswith('Description'):
+        if not transcript_text:
+            print('\n  No transcript on file for this episode, cannot regenerate.\n')
+            return
+        try:
+            description = llm_client.generate_description(transcript_text, ep['title'], config)
+        except llm_client.LLMError as e:
+            print(f'\n  Failed: {e}\n')
+            return
+        description = prompt_description(description)
+        store.update_episode(ep_id, {'description': description})
+
+    elif section.startswith('Keywords'):
+        if not transcript_text:
+            print('\n  No transcript on file for this episode, cannot regenerate.\n')
+            return
+        try:
+            keywords = llm_client.generate_keywords(transcript_text, config)
+        except llm_client.LLMError as e:
+            print(f'\n  Failed: {e}\n')
+            return
+        store.update_episode(ep_id, {'keywords': keywords})
+
+    elif section.startswith('Chapters'):
+        if not transcript_ts:
+            print('\n  No transcript on file for this episode, cannot regenerate.\n')
+            return
+        try:
+            chapters = llm_client.generate_chapters(transcript_ts, config)
+        except llm_client.LLMError as e:
+            print(f'\n  Failed: {e}\n')
+            return
+        store.update_episode(ep_id, {'chapters': chapters})
+
+    elif section.startswith('Soundbites'):
+        if not transcript_ts or not cues:
+            print('\n  No transcript on file for this episode, cannot regenerate.\n')
+            return
+        total_duration = vtt_utils.duration(cues)
+        sb_cfg = config['soundbites']
+        try:
+            candidates = llm_client.generate_soundbites(
+                transcript_ts, sb_cfg['count'], sb_cfg['minDurationSeconds'], sb_cfg['maxDurationSeconds'], config)
+        except llm_client.LLMError as e:
+            print(f'\n  Failed: {e}\n')
+            return
+        soundbites = pipelinegen.finalize_soundbites(candidates, total_duration, sb_cfg)
+
+        prefix = pipelinegen.date_prefix(ep['pubDate'])
+        final_audio_path = os.path.join(MEDIA_DIR, ep['filename'])
+        for sb in soundbites:
+            sb_slug = pipelinegen.slugify(sb['title'], max_len=60)
+            mp3_filename = f'{prefix}_{sb_slug}.mp3'
+            mp4_filename = f'{prefix}_{sb_slug}.mp4'
+            print(f'    Extracting soundbite: {sb["title"]}')
+            audio_tools.extract_clip(final_audio_path, os.path.join(MEDIA_DIR, mp3_filename),
+                                      sb['startTime'], sb['endTime'])
+            sb['mp3'] = mp3_filename
+            sb['caption'] = vtt_utils.text_between(cues, sb['startTime'], sb['endTime'])
+            sb['mp4'] = None
+            if config['video'].get('enabled', True):
+                try:
+                    audio_tools.render_waveform_video(
+                        os.path.join(MEDIA_DIR, mp3_filename), os.path.join(MEDIA_DIR, mp4_filename), config['video'])
+                    sb['mp4'] = mp4_filename
+                except audio_tools.AudioToolsError as e:
+                    print(f'      Video render failed, keeping the MP3 only: {e}')
+        print('\n  Note: previously generated soundbite MP3/MP4 files are NOT deleted; clean up ./media/ manually if needed.')
+        store.update_episode(ep_id, {'soundbites': soundbites})
+
+    elif section.startswith('Social posts'):
+        if not transcript_text:
+            print('\n  No transcript on file for this episode, cannot regenerate.\n')
+            return
+        try:
+            social_posts = llm_client.generate_social_posts(
+                transcript_text, ep['title'], feedgen.strip_html(ep.get('description', '')), config)
+        except llm_client.LLMError as e:
+            print(f'\n  Failed: {e}\n')
+            return
+        store.update_episode(ep_id, {'socialPosts': social_posts})
+
+    updated = store.get_episode(ep_id)
+    md_path = pipelinegen.write_editorial_markdown(updated, config)
+    store.update_episode(ep_id, {'pipelineMeta': {**updated.get('pipelineMeta', {}), 'mdFile': md_path}})
+    print(f'\n  Updated. Editorial file refreshed: {md_path}')
+    regenerate()
+
+
 # ─── First-run wizard ─────────────────────────────────────────────────────────
 
 def first_run_wizard():
@@ -1026,7 +1569,11 @@ def main():
             'Edit episode',
             'Delete episode',
             'List episodes',
+            'Process new episode (AI pipeline)',
+            'Edit processed episode (AI pipeline)',
+            'Configure AI pipeline',
             'Edit show settings',
+            'Advanced Podcast 2.0 settings',
             'Import from RSS feed',
             'Mirror external feed',
             'Exit'
@@ -1043,8 +1590,16 @@ def main():
             delete_episode()
         elif action == 'List episodes':
             list_episodes()
+        elif action == 'Process new episode (AI pipeline)':
+            process_new_episode_ai()
+        elif action == 'Edit processed episode (AI pipeline)':
+            edit_processed_episode_ai()
+        elif action == 'Configure AI pipeline':
+            configure_pipeline()
         elif action == 'Edit show settings':
             setup_show()
+        elif action == 'Advanced Podcast 2.0 settings':
+            advanced_podcast2_settings()
         elif action == 'Import from RSS feed':
             import_from_rss()
         elif action == 'Mirror external feed':
