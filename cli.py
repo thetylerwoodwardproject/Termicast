@@ -5,6 +5,7 @@ import shutil
 import sys
 import uuid
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import requests
@@ -120,6 +121,28 @@ def divider(title=''):
     print(f'\n── {title} {"─" * max(0, 50 - len(title))}')
 
 
+def parse_rss_pubdate(raw, fallback):
+    """
+    Parse an RSS <pubDate> (RFC 822/2822) into a UTC ISO string.
+    Uses email.utils.parsedate_to_datetime, which covers the format variants
+    real-world feeds use (missing weekday, named timezones like EST/PST, etc.)
+    -- a couple of hand-rolled strptime patterns previously missed most of these
+    and silently fell back to "now", which corrupted episode ordering on import
+    since each failed episode got a slightly later timestamp than the last.
+    If parsing still fails, `fallback` is used for every such episode so at
+    least they don't get scattered out of order relative to each other.
+    """
+    if not raw:
+        return fallback
+    try:
+        dt = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 def parse_pubdate_input(raw):
     """
     Parse a date string entered by the user and return a UTC ISO string.
@@ -193,8 +216,10 @@ def manage_txt_records(existing=None):
             purpose = prompt('Purpose attribute (optional, e.g. "verify")')
             records.append({k: v for k, v in {'value': value, 'purpose': purpose}.items() if v})
         if action == 'Delete record':
-            names = [f'{i+1}. {t["value"]}' for i, t in enumerate(records)]
+            names = [f'{i+1}. {t["value"]}' for i, t in enumerate(records)] + ['Cancel']
             choice = prompt_choice('Delete which?', names)
+            if choice == 'Cancel':
+                continue
             records.pop(int(choice.split('.')[0]) - 1)
 
 
@@ -232,8 +257,10 @@ def manage_podroll(existing=None):
                 continue
             items.append({k: v for k, v in {'feedGuid': feed_guid, 'feedUrl': feed_url}.items() if v})
         if action == 'Delete show':
-            names = [f'{i+1}. {it.get("feedGuid") or it.get("feedUrl")}' for i, it in enumerate(items)]
+            names = [f'{i+1}. {it.get("feedGuid") or it.get("feedUrl")}' for i, it in enumerate(items)] + ['Cancel']
             choice = prompt_choice('Delete which?', names)
+            if choice == 'Cancel':
+                continue
             items.pop(int(choice.split('.')[0]) - 1)
 
 
@@ -332,8 +359,10 @@ def manage_chapters(existing=None):
             chapters.sort(key=lambda c: c['startTime'])
 
         if action == 'Edit chapter':
-            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
+            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)] + ['Cancel']
             choice = prompt_choice('Which chapter?', names)
+            if choice == 'Cancel':
+                continue
             idx = int(choice.split('.')[0]) - 1
             ch = chapters[idx]
             chapters[idx] = {
@@ -346,8 +375,10 @@ def manage_chapters(existing=None):
             chapters.sort(key=lambda c: c['startTime'])
 
         if action == 'Delete chapter':
-            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
+            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)] + ['Cancel']
             choice = prompt_choice('Delete which chapter?', names)
+            if choice == 'Cancel':
+                continue
             idx = int(choice.split('.')[0]) - 1
             chapters.pop(idx)
 
@@ -392,8 +423,10 @@ def manage_persons(existing=None):
             }.items() if v})
 
         if action == 'Delete person':
-            names = [f'{i+1}. {p["name"]}' for i, p in enumerate(persons)]
+            names = [f'{i+1}. {p["name"]}' for i, p in enumerate(persons)] + ['Cancel']
             choice = prompt_choice('Delete which person?', names)
+            if choice == 'Cancel':
+                continue
             idx = int(choice.split('.')[0]) - 1
             persons.pop(idx)
 
@@ -554,8 +587,10 @@ def edit_episode():
         print('\n  No episodes to edit.\n')
         return
 
-    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
+    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes] + ['Cancel']
     choice = prompt_choice('Which episode to edit?', names)
+    if choice == 'Cancel':
+        return
     idx = names.index(choice)
     ep = episodes[idx]
     ep_id = ep['id']
@@ -604,7 +639,9 @@ def edit_episode():
 
         if section.startswith('Title'):
             options = ep.get('titleOptions') or [ep['title']]
-            chosen = prompt_choice('Pick a title', options)
+            chosen = prompt_choice('Pick a title', options + ['Cancel'])
+            if chosen == 'Cancel':
+                return
             store.update_episode(ep_id, {'title': chosen, 'titleChosenIndex': options.index(chosen)})
 
         elif section.startswith('Description'):
@@ -800,8 +837,10 @@ def delete_episode():
         print('\n  No episodes to delete.\n')
         return
 
-    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
+    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes] + ['Cancel']
     choice = prompt_choice('Which episode to delete?', names)
+    if choice == 'Cancel':
+        return
     idx = names.index(choice)
     ep = episodes[idx]
 
@@ -965,6 +1004,10 @@ def import_from_rss():
     # ── Import episodes ───────────────────────────────────────────────────────
     imported = 0
     skipped = 0
+    # Fixed once, up front: used only if a pubDate fails to parse, so episodes
+    # with unparseable dates don't drift out of order relative to each other
+    # as the import loop's wall-clock time advances (see parse_rss_pubdate).
+    fallback_pub_date = datetime.now(timezone.utc).isoformat()
 
     for i, item in enumerate(items, 1):
         title = get(item, 'title') or f'Episode {i}'
@@ -1037,13 +1080,7 @@ def import_from_rss():
         guid = (guid_el.text or '').strip() if guid_el is not None else str(uuid.uuid4())
 
         pub_raw = get(item, 'pubDate')
-        pub_date = datetime.now(timezone.utc).isoformat()
-        for fmt in ('%a, %d %b %Y %H:%M:%S %z', '%a, %d %b %Y %H:%M:%S GMT'):
-            try:
-                pub_date = datetime.strptime(pub_raw, fmt).isoformat()
-                break
-            except Exception:
-                continue
+        pub_date = parse_rss_pubdate(pub_raw, fallback_pub_date)
 
         ep_num_str = get(item, 'episode', 'itunes')
         season_str = get(item, 'season', 'itunes')
