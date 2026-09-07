@@ -1386,6 +1386,12 @@ def process_new_episode_ai():
     if not audio_file:
         return
 
+    try:
+        transcribe.check_ready(config)
+    except transcribe.TranscriptionError as e:
+        print(f'\n  Transcription is not set up: {e}\n')
+        return
+
     ep_id = str(uuid.uuid4())
     work_dir = os.path.join(config['workDir'], ep_id)
     os.makedirs(work_dir, exist_ok=True)
