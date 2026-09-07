@@ -122,6 +122,28 @@ Your feed is now live at `https://audio.example.com/feed.xml`.
 
 ---
 
+## Updating
+
+Termicast has no build or install step -- pulling the latest code is the update:
+
+```bash
+cd /opt/termicast
+git pull
+pip3 install -r requirements.txt
+```
+
+- `pip3 install -r requirements.txt` is a no-op if requirements haven't
+  changed, so it's safe to always run it after pulling.
+- Nothing runs as a persistent process, so there's no service to restart.
+  Just quit any `cli.py` session you have open before pulling (a running
+  session already has the old code loaded in memory, so a mid-session
+  `git pull` won't take effect until you exit and run `python3 cli.py`
+  again) -- the cron job that runs `generate.py` (step 8 above) picks up
+  the new code automatically on its next scheduled run.
+- podcast.json, pipeline.json, and feed.xml are untouched by updates unless
+  a specific release note says otherwise -- CLI-only changes (menu wording,
+  new prompts, etc.) never require touching your data.
+
 ## Usage
 
 ```bash
@@ -169,7 +191,7 @@ There are three ways to get an episode into your feed, and none of them
 replace each other -- pick whichever fits a given episode:
 
 1. **Add episode** -- fully manual, described above.
-2. **Process new episode (AI pipeline)** -- described in this section:
+2. **Process New Episode (w/ AI)** -- described in this section:
    drop raw audio + artwork in a folder, and Whisper + Claude/OpenAI generate
    everything else.
 3. **Mirror / Promote** -- adopting another host's feed verbatim, described
@@ -179,7 +201,7 @@ replace each other -- pick whichever fits a given episode:
 
 1. Drop your episode's WAV/FLAC/MP3 and a PNG artwork file into a folder
    (nothing else needs to be in there).
-2. Run `python3 cli.py` -> "Process new episode (AI pipeline)" and point it
+2. Run `python3 cli.py` -> "Process New Episode (w/ AI)" and point it
    at that folder. It will:
    - Convert the audio to MP3 (the only output format Termicast publishes).
    - Transcribe the full episode to VTT with Whisper (cloud or local,
@@ -239,12 +261,12 @@ daily so episodes go live promptly instead of waiting for the next daily run:
 
 ### Editing a processed episode
 
-"Edit processed episode (AI pipeline)" lists episodes that went through the
-pipeline and lets you redo any single piece -- pick a different generated
+"Edit episode" works on any episode regardless of how it was created. For
+episodes that went through the AI pipeline, it also offers AI-pipeline
+options so you can redo any single piece -- pick a different generated
 title, regenerate the description/keywords/chapters/soundbites/social posts,
-or just refresh the editorial markdown file after a manual tweak. This is
-separate from "Edit episode" (the manual editor), which still works on any
-episode regardless of how it was created.
+or just refresh the editorial markdown file after a manual tweak -- alongside
+the regular manual fields.
 
 ## Chapters
 
