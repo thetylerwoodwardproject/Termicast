@@ -3,6 +3,8 @@
 Self-hosted Podcast 2.0 RSS manager. No server process needed -- generates a
 static feed.xml that nginx serves directly.
 
+![Termicast CLI](docs/screenshot.png)
+
 ## How it works
 
 - `cli.py` -- prompt-based management CLI. Writes feed.xml to disk after every change.
