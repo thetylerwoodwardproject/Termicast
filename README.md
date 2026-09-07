@@ -169,7 +169,7 @@ There are three ways to get an episode into your feed, and none of them
 replace each other -- pick whichever fits a given episode:
 
 1. **Add episode** -- fully manual, described above.
-2. **Process new episode (AI pipeline)** -- described in this section:
+2. **Process New Episode (w/ AI)** -- described in this section:
    drop raw audio + artwork in a folder, and Whisper + Claude/OpenAI generate
    everything else.
 3. **Mirror / Promote** -- adopting another host's feed verbatim, described
@@ -179,7 +179,7 @@ replace each other -- pick whichever fits a given episode:
 
 1. Drop your episode's WAV/FLAC/MP3 and a PNG artwork file into a folder
    (nothing else needs to be in there).
-2. Run `python3 cli.py` -> "Process new episode (AI pipeline)" and point it
+2. Run `python3 cli.py` -> "Process New Episode (w/ AI)" and point it
    at that folder. It will:
    - Convert the audio to MP3 (the only output format Termicast publishes).
    - Transcribe the full episode to VTT with Whisper (cloud or local,
@@ -239,12 +239,12 @@ daily so episodes go live promptly instead of waiting for the next daily run:
 
 ### Editing a processed episode
 
-"Edit processed episode (AI pipeline)" lists episodes that went through the
-pipeline and lets you redo any single piece -- pick a different generated
+"Edit episode" works on any episode regardless of how it was created. For
+episodes that went through the AI pipeline, it also offers AI-pipeline
+options so you can redo any single piece -- pick a different generated
 title, regenerate the description/keywords/chapters/soundbites/social posts,
-or just refresh the editorial markdown file after a manual tweak. This is
-separate from "Edit episode" (the manual editor), which still works on any
-episode regardless of how it was created.
+or just refresh the editorial markdown file after a manual tweak -- alongside
+the regular manual fields.
 
 ## Chapters
 

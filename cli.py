@@ -559,15 +559,142 @@ def edit_episode():
     idx = names.index(choice)
     ep = episodes[idx]
     ep_id = ep['id']
+    is_processed = bool(ep.get('pipelineMeta'))
 
-    section = prompt_choice('What do you want to edit?', [
+    section_options = [
         'Basic info',
         'Chapters',
         'Persons',
         'Soundbite',
         'Location',
         'Transcript'
-    ])
+    ]
+    if is_processed:
+        section_options += [
+            'Title (pick a different generated option)',
+            'Description (regenerate via AI)',
+            'Keywords (regenerate via AI)',
+            'Chapters (regenerate via AI)',
+            'Soundbites (regenerate via AI)',
+            'Social posts (regenerate via AI)',
+            'Regenerate editorial file only',
+        ]
+    section_options.append('Back')
+
+    section = prompt_choice('What do you want to edit?', section_options)
+    if section == 'Back':
+        return
+
+    ai_sections = (
+        'Title (pick a different generated option)',
+        'Description (regenerate via AI)',
+        'Keywords (regenerate via AI)',
+        'Chapters (regenerate via AI)',
+        'Soundbites (regenerate via AI)',
+        'Social posts (regenerate via AI)',
+        'Regenerate editorial file only',
+    )
+
+    if section in ai_sections:
+        config = pipeline_config.load()
+        transcript_path = os.path.join(MEDIA_DIR, ep['transcript']) if ep.get('transcript') else None
+        cues = vtt_utils.parse_vtt(transcript_path) if transcript_path and os.path.isfile(transcript_path) else []
+        transcript_text = vtt_utils.full_text(cues)
+        transcript_ts = vtt_utils.transcript_with_timestamps(cues)
+
+        if section.startswith('Title'):
+            options = ep.get('titleOptions') or [ep['title']]
+            chosen = prompt_choice('Pick a title', options)
+            store.update_episode(ep_id, {'title': chosen, 'titleChosenIndex': options.index(chosen)})
+
+        elif section.startswith('Description'):
+            if not transcript_text:
+                print('\n  No transcript on file for this episode, cannot regenerate.\n')
+                return
+            try:
+                description = llm_client.generate_description(transcript_text, ep['title'], config)
+            except llm_client.LLMError as e:
+                print(f'\n  Failed: {e}\n')
+                return
+            description = prompt_description(description)
+            store.update_episode(ep_id, {'description': description})
+
+        elif section.startswith('Keywords'):
+            if not transcript_text:
+                print('\n  No transcript on file for this episode, cannot regenerate.\n')
+                return
+            try:
+                keywords = llm_client.generate_keywords(transcript_text, config)
+            except llm_client.LLMError as e:
+                print(f'\n  Failed: {e}\n')
+                return
+            store.update_episode(ep_id, {'keywords': keywords})
+
+        elif section.startswith('Chapters'):
+            if not transcript_ts:
+                print('\n  No transcript on file for this episode, cannot regenerate.\n')
+                return
+            try:
+                chapters = llm_client.generate_chapters(transcript_ts, config)
+            except llm_client.LLMError as e:
+                print(f'\n  Failed: {e}\n')
+                return
+            store.update_episode(ep_id, {'chapters': chapters})
+
+        elif section.startswith('Soundbites'):
+            if not transcript_ts or not cues:
+                print('\n  No transcript on file for this episode, cannot regenerate.\n')
+                return
+            total_duration = vtt_utils.duration(cues)
+            sb_cfg = config['soundbites']
+            try:
+                candidates = llm_client.generate_soundbites(
+                    transcript_ts, sb_cfg['count'], sb_cfg['minDurationSeconds'], sb_cfg['maxDurationSeconds'], config)
+            except llm_client.LLMError as e:
+                print(f'\n  Failed: {e}\n')
+                return
+            soundbites = pipelinegen.finalize_soundbites(candidates, total_duration, sb_cfg)
+
+            prefix = pipelinegen.date_prefix(ep['pubDate'])
+            final_audio_path = os.path.join(MEDIA_DIR, ep['filename'])
+            for sb in soundbites:
+                sb_slug = pipelinegen.slugify(sb['title'], max_len=60)
+                mp3_filename = f'{prefix}_{sb_slug}.mp3'
+                mp4_filename = f'{prefix}_{sb_slug}.mp4'
+                print(f'    Extracting soundbite: {sb["title"]}')
+                audio_tools.extract_clip(final_audio_path, os.path.join(MEDIA_DIR, mp3_filename),
+                                          sb['startTime'], sb['endTime'])
+                sb['mp3'] = mp3_filename
+                sb['caption'] = vtt_utils.text_between(cues, sb['startTime'], sb['endTime'])
+                sb['mp4'] = None
+                if config['video'].get('enabled', True):
+                    try:
+                        audio_tools.render_waveform_video(
+                            os.path.join(MEDIA_DIR, mp3_filename), os.path.join(MEDIA_DIR, mp4_filename), config['video'])
+                        sb['mp4'] = mp4_filename
+                    except audio_tools.AudioToolsError as e:
+                        print(f'      Video render failed, keeping the MP3 only: {e}')
+            print('\n  Note: previously generated soundbite MP3/MP4 files are NOT deleted; clean up ./media/ manually if needed.')
+            store.update_episode(ep_id, {'soundbites': soundbites})
+
+        elif section.startswith('Social posts'):
+            if not transcript_text:
+                print('\n  No transcript on file for this episode, cannot regenerate.\n')
+                return
+            try:
+                social_posts = llm_client.generate_social_posts(
+                    transcript_text, ep['title'], feedgen.strip_html(ep.get('description', '')), config)
+            except llm_client.LLMError as e:
+                print(f'\n  Failed: {e}\n')
+                return
+            store.update_episode(ep_id, {'socialPosts': social_posts})
+
+        updated = store.get_episode(ep_id)
+        md_path = pipelinegen.write_editorial_markdown(updated, config)
+        store.update_episode(ep_id, {'pipelineMeta': {**updated.get('pipelineMeta', {}), 'mdFile': md_path}})
+        print(f'\n  Updated. Editorial file refreshed: {md_path}')
+        regenerate()
+        return
 
     if section == 'Basic info':
         title = prompt('Title', ep['title'], required=True)
@@ -1357,132 +1484,6 @@ def process_new_episode_ai():
     regenerate()
 
 
-# ─── AI pipeline: edit a processed episode ────────────────────────────────────
-
-def edit_processed_episode_ai():
-    episodes = [e for e in store.get_episodes() if e.get('pipelineMeta')]
-    if not episodes:
-        print('\n  No AI-pipeline-processed episodes yet.\n')
-        return
-
-    names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
-    choice = prompt_choice('Which processed episode?', names)
-    ep = episodes[names.index(choice)]
-    ep_id = ep['id']
-    config = pipeline_config.load()
-
-    transcript_path = os.path.join(MEDIA_DIR, ep['transcript']) if ep.get('transcript') else None
-    cues = vtt_utils.parse_vtt(transcript_path) if transcript_path and os.path.isfile(transcript_path) else []
-    transcript_text = vtt_utils.full_text(cues)
-    transcript_ts = vtt_utils.transcript_with_timestamps(cues)
-
-    section = prompt_choice('What do you want to redo?', [
-        'Title (pick a different generated option)',
-        'Description (regenerate via AI)',
-        'Keywords (regenerate via AI)',
-        'Chapters (regenerate via AI)',
-        'Soundbites (regenerate via AI)',
-        'Social posts (regenerate via AI)',
-        'Regenerate editorial file only',
-        'Back'
-    ])
-    if section == 'Back':
-        return
-
-    if section.startswith('Title'):
-        options = ep.get('titleOptions') or [ep['title']]
-        chosen = prompt_choice('Pick a title', options)
-        store.update_episode(ep_id, {'title': chosen, 'titleChosenIndex': options.index(chosen)})
-
-    elif section.startswith('Description'):
-        if not transcript_text:
-            print('\n  No transcript on file for this episode, cannot regenerate.\n')
-            return
-        try:
-            description = llm_client.generate_description(transcript_text, ep['title'], config)
-        except llm_client.LLMError as e:
-            print(f'\n  Failed: {e}\n')
-            return
-        description = prompt_description(description)
-        store.update_episode(ep_id, {'description': description})
-
-    elif section.startswith('Keywords'):
-        if not transcript_text:
-            print('\n  No transcript on file for this episode, cannot regenerate.\n')
-            return
-        try:
-            keywords = llm_client.generate_keywords(transcript_text, config)
-        except llm_client.LLMError as e:
-            print(f'\n  Failed: {e}\n')
-            return
-        store.update_episode(ep_id, {'keywords': keywords})
-
-    elif section.startswith('Chapters'):
-        if not transcript_ts:
-            print('\n  No transcript on file for this episode, cannot regenerate.\n')
-            return
-        try:
-            chapters = llm_client.generate_chapters(transcript_ts, config)
-        except llm_client.LLMError as e:
-            print(f'\n  Failed: {e}\n')
-            return
-        store.update_episode(ep_id, {'chapters': chapters})
-
-    elif section.startswith('Soundbites'):
-        if not transcript_ts or not cues:
-            print('\n  No transcript on file for this episode, cannot regenerate.\n')
-            return
-        total_duration = vtt_utils.duration(cues)
-        sb_cfg = config['soundbites']
-        try:
-            candidates = llm_client.generate_soundbites(
-                transcript_ts, sb_cfg['count'], sb_cfg['minDurationSeconds'], sb_cfg['maxDurationSeconds'], config)
-        except llm_client.LLMError as e:
-            print(f'\n  Failed: {e}\n')
-            return
-        soundbites = pipelinegen.finalize_soundbites(candidates, total_duration, sb_cfg)
-
-        prefix = pipelinegen.date_prefix(ep['pubDate'])
-        final_audio_path = os.path.join(MEDIA_DIR, ep['filename'])
-        for sb in soundbites:
-            sb_slug = pipelinegen.slugify(sb['title'], max_len=60)
-            mp3_filename = f'{prefix}_{sb_slug}.mp3'
-            mp4_filename = f'{prefix}_{sb_slug}.mp4'
-            print(f'    Extracting soundbite: {sb["title"]}')
-            audio_tools.extract_clip(final_audio_path, os.path.join(MEDIA_DIR, mp3_filename),
-                                      sb['startTime'], sb['endTime'])
-            sb['mp3'] = mp3_filename
-            sb['caption'] = vtt_utils.text_between(cues, sb['startTime'], sb['endTime'])
-            sb['mp4'] = None
-            if config['video'].get('enabled', True):
-                try:
-                    audio_tools.render_waveform_video(
-                        os.path.join(MEDIA_DIR, mp3_filename), os.path.join(MEDIA_DIR, mp4_filename), config['video'])
-                    sb['mp4'] = mp4_filename
-                except audio_tools.AudioToolsError as e:
-                    print(f'      Video render failed, keeping the MP3 only: {e}')
-        print('\n  Note: previously generated soundbite MP3/MP4 files are NOT deleted; clean up ./media/ manually if needed.')
-        store.update_episode(ep_id, {'soundbites': soundbites})
-
-    elif section.startswith('Social posts'):
-        if not transcript_text:
-            print('\n  No transcript on file for this episode, cannot regenerate.\n')
-            return
-        try:
-            social_posts = llm_client.generate_social_posts(
-                transcript_text, ep['title'], feedgen.strip_html(ep.get('description', '')), config)
-        except llm_client.LLMError as e:
-            print(f'\n  Failed: {e}\n')
-            return
-        store.update_episode(ep_id, {'socialPosts': social_posts})
-
-    updated = store.get_episode(ep_id)
-    md_path = pipelinegen.write_editorial_markdown(updated, config)
-    store.update_episode(ep_id, {'pipelineMeta': {**updated.get('pipelineMeta', {}), 'mdFile': md_path}})
-    print(f'\n  Updated. Editorial file refreshed: {md_path}')
-    regenerate()
-
-
 # ─── First-run wizard ─────────────────────────────────────────────────────────
 
 def first_run_wizard():
@@ -1569,8 +1570,7 @@ def main():
             'Edit episode',
             'Delete episode',
             'List episodes',
-            'Process new episode (AI pipeline)',
-            'Edit processed episode (AI pipeline)',
+            'Process New Episode (w/ AI)',
             'Configure AI pipeline',
             'Edit show settings',
             'Advanced Podcast 2.0 settings',
@@ -1590,10 +1590,8 @@ def main():
             delete_episode()
         elif action == 'List episodes':
             list_episodes()
-        elif action == 'Process new episode (AI pipeline)':
+        elif action == 'Process New Episode (w/ AI)':
             process_new_episode_ai()
-        elif action == 'Edit processed episode (AI pipeline)':
-            edit_processed_episode_ai()
         elif action == 'Configure AI pipeline':
             configure_pipeline()
         elif action == 'Edit show settings':
