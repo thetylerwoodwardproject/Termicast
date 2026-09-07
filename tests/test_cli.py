@@ -3,7 +3,7 @@ import pytest
 
 
 @pytest.mark.parametrize('tty,no_color,term,expected', [
-    (True, False, 'xterm', '\033[36mHello\033[0m'),
+    (True, False, 'xterm', '\033[38;2;192;255;0mHello\033[0m'),
     (False, False, 'xterm', 'Hello'),
     (True, True, 'xterm', 'Hello'),
     (True, False, 'dumb', 'Hello'),

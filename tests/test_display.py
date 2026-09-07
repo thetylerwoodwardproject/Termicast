@@ -128,10 +128,11 @@ def test_console_capabilities(monkeypatch, tty, term, no_color, reduced):
     assert console is not display.console()
     console.print('123 True https://example.test')
     assert output.getvalue() == '123 True https://example.test\n'
+    import re
     console.print('[red]literal[/red] 123', style='accent')
     text = output.getvalue()
     assert '[red]literal[/red] 123' in plain(text)
-    assert ('\033[36m' in text) is (tty and term != 'dumb' and not no_color)
+    assert bool(re.search(r'\x1b\[[0-9;]*m', text)) is (tty and term != 'dumb' and not no_color)
     replacement = io.StringIO()
     monkeypatch.setattr(display.sys, 'stdout', replacement)
     display.console().print('new stdout')
@@ -374,16 +375,37 @@ def test_banner_terminal(monkeypatch, width, no_color, reduced):
     assert all(32 <= ord(char) <= 126 for line in text.splitlines() for char in line)
     assert re.sub(r'\x1b\[[0-9;]*m', '', raw) == text
     # NO_COLOR suppresses color, not the shared theme's bold/dim attributes.
-    assert ('\033[1;36m' in raw) is not no_color
+    assert bool(re.search(r'\x1b\[1;[0-9;]*m', raw)) is not no_color
     if no_color:
         assert not re.search(r'\x1b\[[0-9;]*3[0-9][;m]', raw)
-    assert text.endswith('Your podcast. Your signal.\n')
+    # The wordmark and tagline are centered within the terminal width.
+    tagline = 'Your podcast. Your signal.'
+    lines = text.splitlines()
+    assert lines[-1] == tagline.center(width)
     if width < 80:
-        assert text == '[ TERMICAST ]\nYour podcast. Your signal.\n'
+        assert lines == ['[ TERMICAST ]'.center(width), tagline.center(width)]
     else:
-        assert text.splitlines()[0] == '[ BROADCAST CONSOLE ]'
+        assert lines[0] == '[ BROADCAST CONSOLE ]'
+        bolt_lines = [
+            ' _/',
+            '/_ ',
+            '  /',
+            ' / ',
+            '/  ',
+        ]
+        art_lines = [
+            '#####  #####  ####   #   #  #####   ####   ###    ####  #####',
+            '  #    #      #   #  ## ##    #    #      #   #  #        #  ',
+            '  #    ####   ####   # # #    #    #      #####   ###     #  ',
+            '  #    #      #  #   #   #    #    #      #   #      #    #  ',
+            '  #    #####  #   #  #   #  #####   ####  #   #  ####     #  ',
+        ]
+        combined = [f'{bolt}  {letters}' for bolt, letters in zip(bolt_lines, art_lines)]
+        centered = [line.center(width) for line in combined]
+        assert lines[1:6] == centered
+        pad = (width - len(combined[0])) // 2 + len(bolt_lines[0]) + 2
         # Five-column glyphs read T E R M I C A S T from left to right.
-        rows = text.splitlines()[1:6]
+        rows = [row[pad:pad + len(art_lines[0])] for row in lines[1:6]]
         glyphs = ['\n'.join(row[i:i + 5].ljust(5) for row in rows)
                   for i in range(0, 63, 7)]
         assert glyphs == [

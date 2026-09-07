@@ -16,7 +16,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 
-THEME = Theme({'broadcast': 'bold cyan', 'accent': 'cyan', 'muted': 'dim',
+THEME = Theme({'broadcast': 'bold #c0ff00', 'accent': '#c0ff00', 'muted': 'dim',
                'warning': 'yellow'})
 
 
@@ -43,19 +43,29 @@ def banner():
         output.print(Text(f'TERMICAST - {tagline}'))
         return
 
+    width = output.width
     body = Text()
-    if output.width >= 80:
+    if width >= 80:
         body.append('[ BROADCAST CONSOLE ]\n', style='muted')
-        body.append(
-            '#####  #####  ####   #   #  #####   ####   ###    ####  #####\n'
-            '  #    #      #   #  ## ##    #    #      #   #  #        #  \n'
-            '  #    ####   ####   # # #    #    #      #####   ###     #  \n'
-            '  #    #      #  #   #   #    #    #      #   #      #    #  \n'
-            '  #    #####  #   #  #   #  #####   ####  #   #  ####     #  \n',
-            style='broadcast')
+        bolt_lines = [
+            ' _/',
+            '/_ ',
+            '  /',
+            ' / ',
+            '/  ',
+        ]
+        art_lines = [
+            '#####  #####  ####   #   #  #####   ####   ###    ####  #####',
+            '  #    #      #   #  ## ##    #    #      #   #  #        #  ',
+            '  #    ####   ####   # # #    #    #      #####   ###     #  ',
+            '  #    #      #  #   #   #    #    #      #   #      #    #  ',
+            '  #    #####  #   #  #   #  #####   ####  #   #  ####     #  ',
+        ]
+        for bolt, letters in zip(bolt_lines, art_lines):
+            body.append((f'{bolt}  {letters}').center(width) + '\n', style='broadcast')
     else:
-        body.append('[ TERMICAST ]\n', style='broadcast')
-    body.append(tagline, style='muted')
+        body.append('[ TERMICAST ]'.center(width) + '\n', style='broadcast')
+    body.append(tagline.center(width), style='yellow')
     output.print(body)
 
 
@@ -135,7 +145,7 @@ def busy(message, log=print):
         yield
 
 
-def color(text, code='36'):
+def color(text, code='38;2;192;255;0'):
     if not sys.stdout.isatty() or 'NO_COLOR' in os.environ or os.environ.get('TERM') == 'dumb':
         return text
     return f'\033[{code}m{text}\033[0m'
