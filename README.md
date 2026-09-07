@@ -5,7 +5,7 @@ static feed.xml that nginx serves directly.
 
 ## How it works
 
-- `cli.py` -- run this to manage episodes. Writes feed.xml to disk after every change.
+- `cli.py` -- prompt-based management CLI. Writes feed.xml to disk after every change.
 - `generate.py` -- tiny script cron runs daily to publish scheduled episodes automatically.
 - nginx serves feed.xml and the media folder as static files. Nothing is ever running.
 
@@ -14,7 +14,7 @@ static feed.xml that nginx serves directly.
 - Python 3.8+
 - nginx
 - certbot
-- `pip3 install requests` (only needed for the RSS import feature)
+- `pip3 install -r requirements.txt` (requests for feed transfers; Rich for terminal presentation)
 
 ## Setup
 
@@ -35,7 +35,7 @@ scp -r termicast/ user@yourserver:/opt/termicast
 ### 2. Install dependencies
 
 ```bash
-pip3 install requests
+pip3 install -r requirements.txt
 apt install nginx certbot python3-certbot-nginx
 ```
 
@@ -126,6 +126,30 @@ python3 cli.py
 
 feed.xml is regenerated automatically after every action in the CLI.
 
+The CLI uses a Rich-powered broadcast-console theme: grouped numbered menus,
+a local-status dashboard, responsive episode tables, and animated fetch spinners.
+Downloads show progress, transfer speed, and estimated time remaining. Menu
+numbers are unchanged; type a number and press Enter. Enter accepts a marked
+default, and Ctrl+C exits. This is a prompt-based interface, not an arrow-key TUI.
+
+The dashboard reports local episode counts, scheduled episodes, mirror source,
+and whether `feed.xml` exists. It does not claim the public feed is reachable.
+Narrow terminals wrap episode titles and omit the filename/ID columns.
+
+Colors are automatically disabled when output is redirected, `NO_COLOR` is
+set, or `TERM=dumb`. Redirected output and custom sync loggers stay plain and
+do not animate. To keep the styled menus but turn off motion:
+
+```bash
+TERMICAST_REDUCED_MOTION=1 python3 cli.py
+```
+
+Any value (including an empty value) enables this setting. Reduced motion
+prints final progress only; `NO_COLOR` alone does not disable motion.
+
+Primary feeds list episodes newest-first by publication timestamp normalized
+to UTC, rather than by the date string's spelling or timezone offset.
+
 ### Adding an episode
 
 1. Drop your MP3 (and optional transcript) into `./media/`
@@ -150,6 +174,9 @@ Select "Import from RSS feed" and paste your current feed URL. The script will:
 
 Existing files are skipped on re-import so it is safe to run more than once.
 
+Imported episodes are stored newest-first by UTC publication timestamp. Episodes with
+missing or invalid publication dates are skipped with a warning.
+
 ### Manually regenerating the feed
 
 ```bash
@@ -166,14 +193,14 @@ Chapter JSON files are written to `./media/` automatically when the feed regener
 
 ## Mirroring an external feed
 
-"Mirror external feed" in the CLI keeps a verbatim, self-contained copy of
+"Mirror external feed" in the CLI keeps a raw-XML, newest-first copy of
 another host's feed on this server -- a failover if anything happens to your
 primary host.
 
 Unlike "Import from RSS feed" (a one-way *migration* that flattens the feed
 into this tool's data model), the mirror never re-generates the XML. The
-source feed is kept byte-for-byte, so every tag survives exactly as
-published: `podcast:guid`, `podcast:value` splits, `podcast:podroll`,
+source XML is preserved except for URL rewrites and item order, so every tag
+survives exactly as published: `podcast:guid`, `podcast:value` splits, `podcast:podroll`,
 `podcast:funding`, `psc:chapters`, multiple categories, and any future
 Podcasting 2.0 tags. The only changes are:
 
@@ -181,10 +208,30 @@ Podcasting 2.0 tags. The only changes are:
   artwork, chapter images, the XSL stylesheet) are rewritten to local copies
   downloaded into `./mirror/media/`.
 - The `atom:link rel="self"` is pointed at the mirror's own URL.
+- Direct channel items are ordered newest first by their `pubDate` UTC instant.
+  Equal dates retain source order; missing or invalid dates come last in source order.
 
 Failed downloads keep their original source URL (a working remote link beats
-a broken local one) and are retried on the next sync. Syncs are incremental:
-already-downloaded assets are skipped.
+a broken local one). Downloads retry three times with backoff; if an OP3 URL
+still fails, the downloader tries its direct origin. Downloads use temporary
+files, check nonempty content and declared transfer length, and only publish
+completed files. The same downloader and colored progress bars are used by
+RSS import. Repeat imports skip known episode GUIDs; failed audio downloads
+skip the episode so the next import can retry.
+
+If RSS.com's Triton dynamic-audio stream fails and advertises a signed,
+same-host static-audio fallback, the downloader tries that fallback first.
+This can omit dynamically inserted ads; it does not discard length checks
+or accept a truncated stream as a completed download.
+
+Syncs are incremental: already-downloaded assets are skipped, and failed
+assets are retried on the next sync. Standalone sync exits nonzero on partial
+failure, including chapter-image failures. Run sync as a user with write
+access to both `mirror/` and `mirror/media/`. Colors are suppressed for
+redirected output, `NO_COLOR`, and `TERM=dumb`.
+
+Ordering moves exact raw item blocks without reserializing them, preserving
+namespaces, unknown tags, CDATA, and formatting.
 
 Set it up in the CLI, then serve and schedule it:
 
@@ -266,6 +313,17 @@ Place SRT, VTT, or TXT files in `./media/` and enter the filename when adding
 or editing an episode. The correct MIME type is set automatically based on the
 file extension.
 
+## Running the tests
+
+```bash
+pip3 install -r requirements.txt pytest
+pytest
+```
+
+Tests using the `data_dir` fixture run against an isolated scratch directory.
+The fixture monkeypatches storage, feed, mirror, promotion, and CLI media paths,
+so those tests never write to your real database, media, or generated feeds.
+
 ## OP3 Tracking
 
 Enclosure URLs are automatically prefixed with `https://op3.dev/e/` when you
@@ -280,12 +338,14 @@ You can disable OP3 by clearing the `op3Prefix` field in "Edit show settings".
 
 ```
 termicast/
-  cli.py              # Management CLI -- run this to manage episodes
+  cli.py              # Prompt-based management CLI
   generate.py         # Cron script -- regenerates feed.xml
   feed.py             # RSS XML generator
-  mirror.py           # Cron script -- verbatim mirror of an external feed
+  mirror.py           # Cron script -- raw XML mirror, newest first
   promote.py          # Adopt the mirror as the primary feed (failover)
   store.py            # JSON data layer
+  requirements.txt    # requests, Rich
+  tests/              # pytest tests and isolated data directory fixture
   mirror/             # Mirrored feed.xml + downloaded assets (auto-created)
   podcast.json        # Episode database (auto-created on first run)
   feed.xml            # Generated RSS feed (symlinked into /var/www/html)

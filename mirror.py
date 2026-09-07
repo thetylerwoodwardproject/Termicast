@@ -1,15 +1,17 @@
 """
-mirror.py - verbatim mirror of an external podcast RSS feed
+mirror.py - raw XML mirror of an external podcast RSS feed, newest first
 
-Strategy: the source feed's XML is kept byte-for-byte intact -- it is never
-parsed and re-serialized, so every tag survives exactly as published
+Strategy: the source feed's raw XML is preserved -- it is never
+re-serialized, so every tag survives exactly as published
 (podcast:guid, podcast:value, podcast:podroll, psc:chapters, tags that don't
-exist yet...). The ONLY changes made are targeted string replacements:
+exist yet...). The ONLY changes made are:
 
   1. Asset URLs (enclosures, transcripts, chapters JSON, artwork, chapter
      images, the XSL stylesheet) are downloaded into ./mirror/media/ and the
      URLs in the XML are rewritten to point at this server.
   2. The atom:link rel="self" href is rewritten to the mirror feed's own URL.
+  3. Direct channel items are moved newest first by pubDate UTC instant;
+     equal dates retain source order, and missing/invalid dates stay last.
 
 Everything else -- <link> elements, funding URLs, GUIDs, WebSub hub, value
 splits -- passes through untouched. The result is a drop-in failover copy:
@@ -28,13 +30,17 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from urllib.parse import urlparse
+from xml.parsers import expat
 
 import requests
 
 import store
+from display import busy, color, Progress
+from transfer import download
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.environ.get('TERMICAST_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
 MIRROR_DIR = os.path.join(BASE_DIR, 'mirror')
 MIRROR_MEDIA_DIR = os.path.join(MIRROR_DIR, 'media')
 MIRROR_FEED_FILE = os.path.join(MIRROR_DIR, 'feed.xml')
@@ -110,23 +116,67 @@ def download_asset(url, dest_path, log):
     """Download url to dest_path unless it already exists. True on success."""
     if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
         return True
-    tmp_path = dest_path + '.part'
-    try:
-        res = requests.get(url, stream=True, timeout=60,
-                           headers={'User-Agent': USER_AGENT})
-        res.raise_for_status()
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(tmp_path, 'wb') as f:
-            for chunk in res.iter_content(chunk_size=65536):
-                f.write(chunk)
-        os.replace(tmp_path, dest_path)
-        log(f'    downloaded {os.path.basename(dest_path)}')
-        return True
-    except Exception as e:
-        log(f'    FAILED {url}: {e}')
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        return False
+    return download(url, dest_path, log=log)
+
+
+def reorder_episode_items(xml_text):
+    """Sort direct RSS channel items without reserializing any XML.
+
+    Expat offsets index UTF-8 bytes, not Python characters. Replace only item
+    spans, leaving channel metadata, whitespace and comments in their slots.
+    Malformed XML raises ExpatError before any mirror output is written.
+    """
+    raw = xml_text.encode('utf-8')
+    parser = expat.ParserCreate(encoding='utf-8', namespace_separator='}')
+    stack = []
+    spans = []
+    date_parts = []
+    item_start = None
+    item_empty = False
+    item_path = ['rss', 'channel', 'item']
+    opening_tag = re.compile(br'''<(?:[^>"']|"[^"]*"|'[^']*')*>''')
+
+    def start(name, attrs):
+        nonlocal item_start, item_empty
+        stack.append(name)
+        if stack == item_path:
+            item_start = parser.CurrentByteIndex
+            opening = opening_tag.match(raw, item_start)
+            item_empty = opening.group().endswith(b'/>')
+            date_parts.clear()
+
+    def text(value):
+        if stack == item_path + ['pubDate']:
+            date_parts.append(value)
+
+    def end(name):
+        if stack == item_path:
+            stop = parser.CurrentByteIndex
+            # Empty <item/> ends at the next token; normal items end at </item>.
+            if not item_empty:
+                stop = raw.index(b'>', stop) + 1
+            try:
+                date = datetime.fromisoformat(store.parse_rss_date(''.join(date_parts)))
+                key = (True, date)
+            except (TypeError, ValueError, OverflowError):
+                key = (False, datetime.min.replace(tzinfo=timezone.utc))
+            spans.append((item_start, stop, key))
+        stack.pop()
+
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.CharacterDataHandler = text
+    # Do not expand custom entities into synthetic item markup without raw spans.
+    parser.DefaultHandler = lambda value: None
+    parser.Parse(raw, True)
+    ordered = sorted(spans, key=lambda span: span[2], reverse=True)
+    pieces = []
+    previous = 0
+    for (start, stop, _), (source_start, source_stop, _) in zip(spans, ordered):
+        pieces.extend((raw[previous:start], raw[source_start:source_stop]))
+        previous = stop
+    pieces.append(raw[previous:])
+    return b''.join(pieces).decode('utf-8')
 
 
 def collect_assets(xml_text):
@@ -167,9 +217,10 @@ def localize_chapters_json(path, media_base_url, log):
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except Exception as e:
-        log(f'    could not parse chapters JSON {os.path.basename(path)}: {e}')
-        return
+        log(color(f'    could not parse chapters JSON {os.path.basename(path)}: {e}', '33'))
+        return 1
     changed = False
+    failed = 0
     for ch in data.get('chapters', []):
         img = ch.get('img')
         if not img or not img.startswith(('http://', 'https://')):
@@ -180,9 +231,12 @@ def localize_chapters_json(path, media_base_url, log):
         if download_asset(img, os.path.join(MIRROR_MEDIA_DIR, name), log):
             ch['img'] = f'{media_base_url}/{name}'
             changed = True
+        else:
+            failed += 1
     if changed:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
+    return failed
 
 
 def sync_mirror(log=print):
@@ -199,15 +253,21 @@ def sync_mirror(log=print):
         raise RuntimeError('Show baseUrl is not set; run the setup wizard first.')
     feed_url = f'{base_url}/mirror/feed.xml'
     media_base_url = f'{base_url}/mirror/media'
+    os.makedirs(MIRROR_MEDIA_DIR, exist_ok=True)
+    for directory in (MIRROR_DIR, MIRROR_MEDIA_DIR):
+        if not os.access(directory, os.W_OK):
+            raise PermissionError(f'Mirror directory is not writable: {directory}. '
+                                  'Run sync as its owner or grant the sync user write access.')
 
-    log(f'  Fetching {source_url}')
-    res = requests.get(source_url, timeout=60, headers={'User-Agent': USER_AGENT})
-    res.raise_for_status()
-    res.encoding = res.encoding or 'utf-8'
-    xml_text = res.text
+    with busy(f'  Fetching {source_url}', log=log):
+        res = requests.get(source_url, timeout=60, headers={'User-Agent': USER_AGENT})
+        res.raise_for_status()
+        res.encoding = res.encoding or 'utf-8'
+        xml_text = res.text
+        xml_text = reorder_episode_items(xml_text)
 
     assets = collect_assets(xml_text)
-    log(f'  Found {len(assets)} unique assets to localize')
+    log(color(f'  Found {len(assets)} unique assets to localize'))
 
     os.makedirs(MIRROR_MEDIA_DIR, exist_ok=True)
     ok = failed = 0
@@ -216,7 +276,7 @@ def sync_mirror(log=print):
         dest = os.path.join(MIRROR_MEDIA_DIR, name)
         if download_asset(url, dest, log):
             if kind == 'chapters':
-                localize_chapters_json(dest, media_base_url, log)
+                failed += localize_chapters_json(dest, media_base_url, log)
             # Replace the URL exactly as written in the XML. On failure the
             # original remote URL is kept -- a working remote link beats a
             # broken local one.
@@ -225,6 +285,9 @@ def sync_mirror(log=print):
             ok += 1
         else:
             failed += 1
+    progress = Progress(len(assets), label='  Mirror', log=log, unit='assets processed')
+    progress.update(len(assets))
+    progress.finish()
 
     # Point the self link at the mirror itself so validators don't flag it
     m = SELF_LINK_RE.search(xml_text)
@@ -237,14 +300,16 @@ def sync_mirror(log=print):
         f.write(xml_text)
     os.replace(tmp, MIRROR_FEED_FILE)
 
-    log(f'  Mirror written to {MIRROR_FEED_FILE}')
-    log(f'  Assets: {ok} localized, {failed} failed (left pointing at source)')
+    log(color(f'  Mirror written to {MIRROR_FEED_FILE}', '32'))
+    log(color(f'  Assets: {ok} localized, {failed} failures (including chapter assets)',
+              '33' if failed else '32'))
     return {'assets_ok': ok, 'assets_failed': failed, 'feed_url': feed_url}
 
 
 if __name__ == '__main__':
     try:
-        sync_mirror()
+        stats = sync_mirror()
+        sys.exit(1 if stats['assets_failed'] else 0)
     except Exception as e:
         print(f'mirror sync failed: {e}', file=sys.stderr)
         sys.exit(1)

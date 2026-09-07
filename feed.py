@@ -15,7 +15,9 @@ from email.utils import formatdate
 
 import store
 
-FEED_FILE = os.path.join(os.path.dirname(__file__), 'feed.xml')
+BASE_DIR = os.environ.get('TERMICAST_DATA_DIR') or os.path.dirname(__file__)
+FEED_FILE = os.path.join(BASE_DIR, 'feed.xml')
+MEDIA_DIR = os.path.join(BASE_DIR, 'media')
 
 MIME_MAP = {
     'mp3': 'audio/mpeg',
@@ -117,6 +119,11 @@ def location_attrs(loc):
         if loc.get(key):
             attrs += f' {key}="{xa(loc[key])}"'
     return attrs
+
+
+def chapters_json_path(ep_id):
+    """Path to the generated podcast:chapters JSON file for an episode."""
+    return os.path.join(MEDIA_DIR, f'{ep_id}-chapters.json')
 
 
 def build_chapters_json(chapters):
@@ -314,7 +321,7 @@ def generate_feed():
             chap_url = f'{base_url}/media/{ep["id"]}-chapters.json'
             L.append(f'    <podcast:chapters url="{xa(chap_url)}" type="application/json+chapters"/>')
             # Write chapters JSON file to disk
-            chap_file = os.path.join(os.path.dirname(FEED_FILE), 'media', f'{ep["id"]}-chapters.json')
+            chap_file = chapters_json_path(ep['id'])
             os.makedirs(os.path.dirname(chap_file), exist_ok=True)
             with open(chap_file, 'w', encoding='utf-8') as f:
                 json.dump(build_chapters_json(ep['chapters']), f, indent=2)

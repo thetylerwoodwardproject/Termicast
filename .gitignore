@@ -7,3 +7,7 @@ podcast.json
 feed.xml
 media/
 mirror/
+activity.log.jsonl
+
+# Test artifacts
+.pytest_cache/

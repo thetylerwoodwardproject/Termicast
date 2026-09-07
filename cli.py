@@ -11,12 +11,32 @@ import xml.etree.ElementTree as ET
 
 import store
 import feed as feedgen
+from display import color, Progress
+from display import banner, busy, console, dashboard, episode_table, menu, section
+from transfer import download
 
-MEDIA_DIR = os.path.join(os.path.dirname(__file__), 'media')
+MEDIA_DIR = os.path.join(store.BASE_DIR, 'media')
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
 
 # ─── Prompt helpers ──────────────────────────────────────────────────────────
+
+class CancelAction(Exception):
+    """Return to the nearest menu without accepting the current prompt."""
+
+
+def read_input(message):
+    console().print('/back or /cancel: return | Ctrl+C: cancel', style='muted')
+    try:
+        value = input(color(message)).strip()
+    except KeyboardInterrupt:
+        raise CancelAction() from None
+    if value.lower() in ('/back', '/cancel'):
+        raise CancelAction()
+    if value.lower() in ('//back', '//cancel'):
+        return value[1:]
+    return value
+
 
 def prompt(message, default=None, required=False):
     if default:
@@ -24,43 +44,38 @@ def prompt(message, default=None, required=False):
     else:
         msg = f'  {message}: '
     while True:
-        val = input(msg).strip()
+        val = read_input(msg)
         if not val and default is not None:
             return default
         if not val and required:
-            print('    Required.')
+            print(color('    Required.', '33'))
             continue
         return val or None
 
 
 def prompt_bool(message, default=True):
     yn = 'Y/n' if default else 'y/N'
-    val = input(f'  {message} [{yn}]: ').strip().lower()
+    val = read_input(f'  {message} [{yn}]: ').lower()
     if not val:
         return default
     return val in ('y', 'yes')
 
 
-def prompt_choice(message, choices, default=None):
-    print(f'\n  {message}')
-    for i, c in enumerate(choices, 1):
-        marker = ' *' if c == default else ''
-        print(f'    {i}. {c}{marker}')
+def prompt_choice(message, choices, default=None, groups=None):
+    menu(message, choices, default, groups)
     while True:
-        val = input('  Choice: ').strip()
+        val = read_input('  Choice: ')
         if not val and default:
             return default
         if val.isdigit() and 1 <= int(val) <= len(choices):
             return choices[int(val) - 1]
-        print('    Invalid choice.')
+        print(color('    Invalid choice.', '33'))
 
 
 def prompt_checkbox(message, choices):
-    print(f'\n  {message}')
-    for i, c in enumerate(choices, 1):
-        print(f'    {i}. {c}')
+    menu(message, choices)
     print('  Enter numbers separated by spaces (e.g. 1 3 5), or Enter for all:')
-    val = input('  > ').strip()
+    val = read_input('  > ')
     if not val:
         return list(range(len(choices)))
     try:
@@ -89,7 +104,7 @@ def format_date(date_str):
     if not date_str:
         return 'not set'
     try:
-        return datetime.fromisoformat(date_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M UTC')
+        return store.episode_date({'pubDate': date_str}).strftime('%Y-%m-%d %H:%M UTC')
     except Exception:
         return date_str
 
@@ -102,15 +117,16 @@ def filesize(filepath):
 
 
 def regenerate():
-    live, scheduled = feedgen.write_feed()
-    print(f'  feed.xml updated  ({live} live', end='')
+    with busy('Updating local feed.xml...'):
+        live, scheduled = feedgen.write_feed()
+    print(color('  feed.xml updated', '32') + f'  ({live} live', end='')
     if scheduled:
         print(f', {scheduled} scheduled', end='')
     print(')\n')
 
 
 def divider(title=''):
-    print(f'\n── {title} {"─" * max(0, 50 - len(title))}')
+    section(title)
 
 
 def parse_pubdate_input(raw):
@@ -181,45 +197,51 @@ def manage_chapters(existing=None):
             choices += ['Edit chapter', 'Delete chapter']
         choices.append('Done')
 
-        action = prompt_choice('Chapters', choices)
+        try:
+            action = prompt_choice('Chapters', choices)
+        except (CancelAction, KeyboardInterrupt):
+            return existing if existing is not None else []
 
         if action == 'Done':
             break
 
-        if action == 'Add chapter':
-            start_raw = prompt('Start time (seconds or HH:MM:SS)', required=True)
-            title = prompt('Chapter title', required=True)
-            url = prompt('Chapter URL (optional)')
-            img = prompt('Chapter image URL (optional)')
-            toc = prompt_bool('Include in table of contents?', True)
-            chapters.append({
-                'startTime': parse_time_to_seconds(start_raw),
-                'title': title,
-                'url': url,
-                'img': img,
-                'toc': toc
-            })
-            chapters.sort(key=lambda c: c['startTime'])
+        try:
+            if action == 'Add chapter':
+                start_raw = prompt('Start time (seconds or HH:MM:SS)', required=True)
+                title = prompt('Chapter title', required=True)
+                url = prompt('Chapter URL (optional)')
+                img = prompt('Chapter image URL (optional)')
+                toc = prompt_bool('Include in table of contents?', True)
+                chapters.append({
+                    'startTime': parse_time_to_seconds(start_raw),
+                    'title': title,
+                    'url': url,
+                    'img': img,
+                    'toc': toc
+                })
+                chapters.sort(key=lambda c: c['startTime'])
 
-        if action == 'Edit chapter':
-            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
-            choice = prompt_choice('Which chapter?', names)
-            idx = int(choice.split('.')[0]) - 1
-            ch = chapters[idx]
-            chapters[idx] = {
-                'startTime': parse_time_to_seconds(prompt('Start time', str(ch['startTime']))),
-                'title': prompt('Title', ch['title'], required=True),
-                'url': prompt('URL', ch.get('url', '')),
-                'img': prompt('Image URL', ch.get('img', '')),
-                'toc': prompt_bool('Include in TOC?', ch.get('toc', True))
-            }
-            chapters.sort(key=lambda c: c['startTime'])
+            if action == 'Edit chapter':
+                names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
+                choice = prompt_choice('Which chapter?', names)
+                idx = int(choice.split('.')[0]) - 1
+                ch = chapters[idx]
+                chapters[idx] = {
+                    'startTime': parse_time_to_seconds(prompt('Start time', str(ch['startTime']))),
+                    'title': prompt('Title', ch['title'], required=True),
+                    'url': prompt('URL', ch.get('url', '')),
+                    'img': prompt('Image URL', ch.get('img', '')),
+                    'toc': prompt_bool('Include in TOC?', ch.get('toc', True))
+                }
+                chapters.sort(key=lambda c: c['startTime'])
 
-        if action == 'Delete chapter':
-            names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
-            choice = prompt_choice('Delete which chapter?', names)
-            idx = int(choice.split('.')[0]) - 1
-            chapters.pop(idx)
+            if action == 'Delete chapter':
+                names = [f'{i+1}. {c["title"]}' for i, c in enumerate(chapters)]
+                choice = prompt_choice('Delete which chapter?', names)
+                idx = int(choice.split('.')[0]) - 1
+                chapters.pop(idx)
+        except (CancelAction, KeyboardInterrupt):
+            continue
 
     # Clean up None/empty values
     return [
@@ -247,25 +269,31 @@ def manage_persons(existing=None):
             choices.append('Delete person')
         choices.append('Done')
 
-        action = prompt_choice('Persons', choices)
+        try:
+            action = prompt_choice('Persons', choices)
+        except (CancelAction, KeyboardInterrupt):
+            return existing if existing is not None else []
         if action == 'Done':
             break
 
-        if action == 'Add person':
-            name = prompt('Name', required=True)
-            role = prompt_choice('Role', ['host', 'co-host', 'guest', 'editor', 'producer', 'reporter', 'other'], 'host')
-            group = prompt('Group (optional, e.g. "cast")')
-            img = prompt('Profile image URL (optional)')
-            href = prompt('Profile URL (optional)')
-            persons.append({k: v for k, v in {
-                'name': name, 'role': role, 'group': group, 'img': img, 'href': href
-            }.items() if v})
+        try:
+            if action == 'Add person':
+                name = prompt('Name', required=True)
+                role = prompt_choice('Role', ['host', 'co-host', 'guest', 'editor', 'producer', 'reporter', 'other'], 'host')
+                group = prompt('Group (optional, e.g. "cast")')
+                img = prompt('Profile image URL (optional)')
+                href = prompt('Profile URL (optional)')
+                persons.append({k: v for k, v in {
+                    'name': name, 'role': role, 'group': group, 'img': img, 'href': href
+                }.items() if v})
 
-        if action == 'Delete person':
-            names = [f'{i+1}. {p["name"]}' for i, p in enumerate(persons)]
-            choice = prompt_choice('Delete which person?', names)
-            idx = int(choice.split('.')[0]) - 1
-            persons.pop(idx)
+            if action == 'Delete person':
+                names = [f'{i+1}. {p["name"]}' for i, p in enumerate(persons)]
+                choice = prompt_choice('Delete which person?', names)
+                idx = int(choice.split('.')[0]) - 1
+                persons.pop(idx)
+        except (CancelAction, KeyboardInterrupt):
+            continue
 
     return persons
 
@@ -289,7 +317,7 @@ def prompt_description(existing=None):
     print()
 
     while True:
-        val = input('  > ').strip()
+        val = read_input('  > ')
 
         # Keep existing
         if not val and existing is not None:
@@ -306,10 +334,12 @@ def prompt_description(existing=None):
                 if existing:
                     f.write(existing)
                 tmpfile = f.name
-            subprocess.call([editor, tmpfile])
-            with open(tmpfile, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-            os.unlink(tmpfile)
+            try:
+                subprocess.call([editor, tmpfile])
+                with open(tmpfile, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+            finally:
+                os.unlink(tmpfile)
             if content:
                 return content
             print('    Empty, try again.')
@@ -425,114 +455,130 @@ def edit_episode():
         return
 
     names = [f'{e["title"]} ({format_date(e["pubDate"])})' for e in episodes]
-    choice = prompt_choice('Which episode to edit?', names)
-    idx = names.index(choice)
-    ep = episodes[idx]
-    ep_id = ep['id']
-
-    section = prompt_choice('What do you want to edit?', [
-        'Basic info',
-        'Chapters',
-        'Persons',
-        'Soundbite',
-        'Location',
-        'Transcript'
-    ])
-
-    if section == 'Basic info':
-        title = prompt('Title', ep['title'], required=True)
-        subtitle = prompt('Subtitle', ep.get('subtitle', ''))
-        description = prompt_description(ep.get('description'))
+    while True:
+        choice = prompt_choice('Which episode to edit?', names)
+        idx = names.index(choice)
+        ep = episodes[idx]
+        ep_id = ep['id']
 
         while True:
-            filename = prompt('Audio filename', ep['filename'], required=True)
-            fp = os.path.join(MEDIA_DIR, filename)
-            if os.path.isfile(fp):
-                break
-            print(f'    File not found: {fp}')
-
-        while True:
-            pub_raw = prompt('Publish date/time', ep['pubDate'], required=True)
             try:
-                pub_date = parse_pubdate_input(pub_raw)
+                section = prompt_choice('What do you want to edit?', [
+                    'Basic info',
+                    'Chapters',
+                    'Persons',
+                    'Soundbite',
+                    'Location',
+                    'Transcript'
+                ])
+            except (CancelAction, KeyboardInterrupt):
                 break
-            except ValueError:
-                print('    Invalid date format.')
 
-        ep_num = prompt('Episode number', str(ep['episodeNumber']) if ep.get('episodeNumber') else '')
-        season = prompt('Season', str(ep['season']) if ep.get('season') else '')
-        ep_type = prompt_choice('Episode type', ['full', 'trailer', 'bonus'], ep.get('episodeType', 'full'))
-        artwork = prompt('Episode artwork URL', ep.get('artwork', ''))
-        author = prompt('Episode author', ep.get('author', ''))
+            try:
+                if section == 'Basic info':
+                    title = prompt('Title', ep['title'], required=True)
+                    subtitle = prompt('Subtitle', ep.get('subtitle', ''))
+                    description = prompt_description(ep.get('description'))
 
-        # Episode webpage link. Enter keeps the current value; "-" clears it
-        # (useful for stripping a link inherited from an imported feed).
-        current_link = ep.get('link', '')
-        print(f'    Current link: {current_link or "(none)"}')
-        link_in = prompt('Episode webpage link (Enter=keep, "-" to clear)', current_link or None)
-        link = None if link_in == '-' else link_in
+                    while True:
+                        filename = prompt('Audio filename', ep['filename'], required=True)
+                        fp = os.path.join(MEDIA_DIR, filename)
+                        if os.path.isfile(fp):
+                            break
+                        print(f'    File not found: {fp}')
 
-        explicit = prompt_bool('Explicit?', ep.get('explicit', False))
-        duration = prompt('Duration', ep.get('duration', ''))
+                    while True:
+                        pub_raw = prompt('Publish date/time', ep['pubDate'], required=True)
+                        try:
+                            pub_date = parse_pubdate_input(pub_raw)
+                            break
+                        except ValueError:
+                            print('    Invalid date format.')
 
-        updates = {k: v for k, v in {
-            'title': title,
-            'subtitle': subtitle or None,
-            'description': description,
-            'link': link,
-            'filename': filename,
-            'pubDate': pub_date,
-            'episodeNumber': int(ep_num) if ep_num else None,
-            'season': int(season) if season else None,
-            'episodeType': ep_type,
-            'artwork': artwork or None,
-            'author': author or None,
-            'explicit': explicit,
-            'duration': duration or None,
-            'filesize': filesize(os.path.join(MEDIA_DIR, filename))
-        }.items() if v is not None or k in ('explicit', 'link')}
-        store.update_episode(ep_id, updates)
+                    ep_num = prompt('Episode number', str(ep['episodeNumber']) if ep.get('episodeNumber') else '')
+                    season = prompt('Season', str(ep['season']) if ep.get('season') else '')
+                    ep_type = prompt_choice('Episode type', ['full', 'trailer', 'bonus'], ep.get('episodeType', 'full'))
+                    artwork = prompt('Episode artwork URL', ep.get('artwork', ''))
+                    author = prompt('Episode author', ep.get('author', ''))
 
-    elif section == 'Chapters':
-        chapters = manage_chapters(ep.get('chapters', []))
-        store.update_episode(ep_id, {'chapters': chapters or None})
+                    # Episode webpage link. Enter keeps the current value; "-" clears it
+                    # (useful for stripping a link inherited from an imported feed).
+                    current_link = ep.get('link', '')
+                    print(f'    Current link: {current_link or "(none)"}')
+                    link_in = prompt('Episode webpage link (Enter=keep, "-" to clear)', current_link or None)
+                    link = None if link_in == '-' else link_in
 
-    elif section == 'Persons':
-        persons = manage_persons(ep.get('persons', []))
-        store.update_episode(ep_id, {'persons': persons or None})
+                    explicit = prompt_bool('Explicit?', ep.get('explicit', False))
+                    duration = prompt('Duration', ep.get('duration', ''))
 
-    elif section == 'Soundbite':
-        if ep.get('soundbite') and prompt_bool('Remove existing soundbite?', False):
-            store.update_episode(ep_id, {'soundbite': None})
-        else:
-            sb = ep.get('soundbite', {})
-            sb_start = prompt('Start time', str(sb.get('startTime', '')), required=True)
-            sb_dur = prompt('Duration (seconds)', str(sb.get('duration', '')), required=True)
-            sb_title = prompt('Title', sb.get('title', ''))
-            store.update_episode(ep_id, {'soundbite': {k: v for k, v in {
-                'startTime': parse_time_to_seconds(sb_start),
-                'duration': float(sb_dur),
-                'title': sb_title or None
-            }.items() if v is not None}})
+                    updates = {k: v for k, v in {
+                        'title': title,
+                        'subtitle': subtitle or None,
+                        'description': description,
+                        'link': link,
+                        'filename': filename,
+                        'pubDate': pub_date,
+                        'episodeNumber': int(ep_num) if ep_num else None,
+                        'season': int(season) if season else None,
+                        'episodeType': ep_type,
+                        'artwork': artwork or None,
+                        'author': author or None,
+                        'explicit': explicit,
+                        'duration': duration or None,
+                        'filesize': filesize(os.path.join(MEDIA_DIR, filename))
+                    }.items() if v is not None or k in ('explicit', 'link')}
 
-    elif section == 'Location':
-        if ep.get('location') and prompt_bool('Remove existing location?', False):
-            store.update_episode(ep_id, {'location': None})
-        else:
-            loc = ep.get('location', {})
-            loc_name = prompt('Location name', loc.get('name', ''), required=True)
-            geo = prompt('Geo URI', loc.get('geo', ''))
-            osm = prompt('OSM identifier', loc.get('osm', ''))
-            store.update_episode(ep_id, {'location': {k: v for k, v in {
-                'name': loc_name, 'geo': geo or None, 'osm': osm or None
-            }.items() if v}})
+                elif section == 'Chapters':
+                    existing = ep.get('chapters') or []
+                    chapters = manage_chapters(existing)
+                    # Managers return the original list only when cancelled.
+                    if chapters is existing:
+                        continue
+                    updates = {'chapters': chapters or None}
 
-    elif section == 'Transcript':
-        transcript = prompt('Transcript filename (blank to remove)', ep.get('transcript', ''))
-        store.update_episode(ep_id, {'transcript': transcript or None})
+                elif section == 'Persons':
+                    existing = ep.get('persons') or []
+                    persons = manage_persons(existing)
+                    if persons is existing:
+                        continue
+                    updates = {'persons': persons or None}
 
-    print('\n  Episode updated.')
-    regenerate()
+                elif section == 'Soundbite':
+                    if ep.get('soundbite') and prompt_bool('Remove existing soundbite?', False):
+                        updates = {'soundbite': None}
+                    else:
+                        sb = ep.get('soundbite', {})
+                        sb_start = prompt('Start time', str(sb.get('startTime', '')), required=True)
+                        sb_dur = prompt('Duration (seconds)', str(sb.get('duration', '')), required=True)
+                        sb_title = prompt('Title', sb.get('title', ''))
+                        updates = {'soundbite': {k: v for k, v in {
+                            'startTime': parse_time_to_seconds(sb_start),
+                            'duration': float(sb_dur),
+                            'title': sb_title or None
+                        }.items() if v is not None}}
+
+                elif section == 'Location':
+                    if ep.get('location') and prompt_bool('Remove existing location?', False):
+                        updates = {'location': None}
+                    else:
+                        loc = ep.get('location', {})
+                        loc_name = prompt('Location name', loc.get('name', ''), required=True)
+                        geo = prompt('Geo URI', loc.get('geo', ''))
+                        osm = prompt('OSM identifier', loc.get('osm', ''))
+                        updates = {'location': {k: v for k, v in {
+                            'name': loc_name, 'geo': geo or None, 'osm': osm or None
+                        }.items() if v}}
+
+                elif section == 'Transcript':
+                    transcript = prompt('Transcript filename (blank to remove)', ep.get('transcript', ''))
+                    updates = {'transcript': transcript or None}
+            except (CancelAction, KeyboardInterrupt):
+                continue
+
+            store.update_episode(ep_id, updates)
+            print('\n  Episode updated.')
+            regenerate()
+            return
 
 
 # ─── Delete episode ───────────────────────────────────────────────────────────
@@ -559,62 +605,39 @@ def delete_episode():
 # ─── List episodes ────────────────────────────────────────────────────────────
 
 def list_episodes():
-    episodes = store.get_episodes()
+    divider('Episode Library')
+    episodes = store.load()['episodes']
+    def episode_date(episode):
+        try:
+            return store.episode_date(episode)
+        except (TypeError, ValueError, OverflowError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+    episodes.sort(key=episode_date, reverse=True)
     if not episodes:
         print('\n  No episodes yet.\n')
         return
-    print()
     now = datetime.now(timezone.utc)
+    rows = []
     for ep in episodes:
-        scheduled = ''
+        status = 'Published'
         try:
-            if datetime.fromisoformat(ep['pubDate'].replace('Z', '+00:00')) > now:
-                scheduled = ' [SCHEDULED]'
+            if store.episode_date(ep) > now:
+                status = 'Scheduled'
         except Exception:
-            pass
-        print(f'  [{ep["id"][:8]}...]{scheduled}')
-        print(f'    Title:   {ep["title"]}')
-        print(f'    File:    {ep["filename"]}')
-        print(f'    PubDate: {format_date(ep["pubDate"])}')
-        if ep.get('episodeNumber'):
-            s = f' (Season {ep["season"]})' if ep.get('season') else ''
-            print(f'    Episode: {ep["episodeNumber"]}{s}')
-        print()
+            status = 'Invalid date'
+        rows.append({'id': ep['id'][:8], 'title': ep['title'],
+                     'filename': ep['filename'], 'published': format_date(ep.get('pubDate')),
+                     'status': status, 'number': ep.get('episodeNumber'),
+                     'season': ep.get('season')})
+    episode_table(rows)
+    console().print(f'{len(rows)} episodes | Newest first | Dates in UTC', style='muted')
 
 
 # ─── Import from RSS ──────────────────────────────────────────────────────────
 
 def download_file(url, dest_path, label=''):
     """Download a file with a progress indicator. Returns True on success."""
-    if not url:
-        return False
-    # Strip OP3 or any other analytics prefix (anything before https?:// after the first one)
-    import re
-    url = re.sub(r'^https?://[^/]+/e(?:,\w+)*/(?=https?://)', '', url)
-    try:
-        res = requests.get(url, stream=True, timeout=30,
-                           headers={'User-Agent': 'termicast-importer/1.0'})
-        res.raise_for_status()
-        total = int(res.headers.get('content-length', 0))
-        downloaded = 0
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(dest_path, 'wb') as f:
-            for chunk in res.iter_content(chunk_size=65536):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = int(downloaded / total * 40)
-                    bar = '█' * pct + '░' * (40 - pct)
-                    mb = downloaded / 1_000_000
-                    print(f'\r    [{bar}] {mb:.1f} MB', end='', flush=True)
-        print()
-        return True
-    except Exception as e:
-        print(f'\n    Failed: {e}')
-        # Remove partial file
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        return False
+    return download(url, dest_path, label=label)
 
 
 def import_from_rss():
@@ -622,11 +645,11 @@ def import_from_rss():
 
     feed_url = prompt('RSS feed URL', required=True)
 
-    print('  Fetching feed...')
     try:
-        res = requests.get(feed_url, timeout=15, headers={'User-Agent': 'termicast-importer/1.0'})
-        res.raise_for_status()
-        xml_text = res.text
+        with busy('Fetching RSS feed...'):
+            res = requests.get(feed_url, timeout=15, headers={'User-Agent': 'termicast-importer/1.0'})
+            res.raise_for_status()
+            xml_text = res.text
     except Exception as e:
         print(f'\n  Failed to fetch feed: {e}\n')
         return
@@ -694,6 +717,12 @@ def import_from_rss():
 
     # ── Episode selection ─────────────────────────────────────────────────────
     items = channel.findall('item')
+    def item_date(item):
+        try:
+            return store.episode_date({'pubDate': store.parse_rss_date(get(item, 'pubDate'))})
+        except (TypeError, ValueError, OverflowError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+    items.sort(key=item_date, reverse=True)
     print(f'\n  Found {len(items)} episodes.\n')
 
     if not prompt_bool(f'Import all {len(items)} episodes?', True):
@@ -708,14 +737,30 @@ def import_from_rss():
     # ── Import episodes ───────────────────────────────────────────────────────
     imported = 0
     skipped = 0
+    existing_guids = {ep.get('guid') for ep in store.get_episodes()}
 
     for i, item in enumerate(items, 1):
         title = get(item, 'title') or f'Episode {i}'
-        print(f'\n  [{i}/{len(items)}] {title}')
+        progress = Progress(len(items), label=f'  Import: {title}', unit='episodes')
+        progress.update(i)
+        progress.finish()
+
+        pub_raw = get(item, 'pubDate')
+        try:
+            pub_date = store.parse_rss_date(pub_raw)
+        except (TypeError, ValueError, OverflowError):
+            print(color(f'    Invalid or missing pubDate "{pub_raw}", skipping.', '33'))
+            skipped += 1
+            continue
 
         enclosure = item.find('enclosure')
         audio_url = enclosure.get('url', '') if enclosure is not None else ''
         length_str = enclosure.get('length', '0') if enclosure is not None else '0'
+        guid = get(item, 'guid') or audio_url
+        if guid and guid in existing_guids:
+            print(color('    Episode already imported, skipping.', '33'))
+            skipped += 1
+            continue
 
         # Derive filename from URL, stripping any query params
         try:
@@ -741,7 +786,9 @@ def import_from_rss():
                 if download_file(audio_url, audio_dest):
                     actual_filesize = os.path.getsize(audio_dest)
                 else:
-                    print('    Audio download failed, episode will still be added to database.')
+                    print(color('    Audio download failed, skipping episode; re-import to retry.', '33'))
+                    skipped += 1
+                    continue
 
         # Episode artwork
         ep_artwork_url = get(item, 'image', 'itunes', attr='href')
@@ -776,18 +823,6 @@ def import_from_rss():
                             transcript_filename = None
 
         # Parse dates
-        guid_el = item.find('guid')
-        guid = (guid_el.text or '').strip() if guid_el is not None else str(uuid.uuid4())
-
-        pub_raw = get(item, 'pubDate')
-        pub_date = datetime.now(timezone.utc).isoformat()
-        for fmt in ('%a, %d %b %Y %H:%M:%S %z', '%a, %d %b %Y %H:%M:%S GMT'):
-            try:
-                pub_date = datetime.strptime(pub_raw, fmt).isoformat()
-                break
-            except Exception:
-                continue
-
         ep_num_str = get(item, 'episode', 'itunes')
         season_str = get(item, 'season', 'itunes')
 
@@ -833,16 +868,26 @@ def import_from_rss():
         }.items() if v is not None}
 
         store.add_episode(episode)
+        existing_guids.add(guid)
         imported += 1
         print(f'    Added to feed.')
 
-    print(f'\n  Done. {imported} imported, {skipped} skipped.')
+    print(color(f'\n  Done. {imported} imported, {skipped} skipped.', '32'))
     regenerate()
 
 
 # ─── Mirror external feed ─────────────────────────────────────────────────────
 
 def mirror_menu():
+    while True:
+        try:
+            _mirror_menu()
+            return
+        except (CancelAction, KeyboardInterrupt):
+            print(color('\n  Cancelled. Returning to mirror menu.', '33'))
+
+
+def _mirror_menu():
     import mirror as mirrorgen
 
     divider('Mirror External Feed')
@@ -853,15 +898,15 @@ def mirror_menu():
         print(f'  Source:  {cfg["sourceUrl"]}')
         print(f'  Mirror:  {store.get_show().get("baseUrl", "").rstrip("/")}/mirror/feed.xml')
         print('''
-  The mirror is a verbatim copy of the source feed: every tag (podcast:guid,
-  value splits, podroll, chapters...) is preserved exactly. Only asset URLs
-  are rewritten to local downloads so the copy keeps playing if the source
-  host goes down.''')
+  Every source tag (podcast:guid, value splits, podroll, chapters...) is
+  preserved. Episodes are ordered newest-first by publication time, and
+  asset URLs and the feed self-link are rewritten locally so the copy
+  keeps playing if the source host goes down.''')
         choices = ['Sync now', 'Promote mirror to primary', 'Change source URL', 'Remove mirror', 'Back']
     else:
         print('''
   Mirror an existing feed (e.g. your current host's RSS URL) onto this
-  server as an exact copy. The source XML is kept byte-for-byte; audio,
+  server with original XML tags and newest-first episodes; audio,
   transcripts, chapters, and artwork are downloaded locally so the mirror
   is a self-contained failover if anything happens to your primary host.
 
@@ -872,7 +917,10 @@ def mirror_menu():
     0 9 * * * cd /opt/termicast && python3 mirror.py >> /var/log/termicast-mirror.log 2>&1''')
         choices = ['Set up mirror', 'Back']
 
-    action = prompt_choice('Mirror', choices)
+    try:
+        action = prompt_choice('Mirror', choices)
+    except CancelAction:
+        return
 
     if action == 'Back':
         return
@@ -892,12 +940,12 @@ def mirror_menu():
         print()
         try:
             stats = mirrorgen.sync_mirror(log=print)
-            print(f'\n  Mirror is live at {stats["feed_url"]}')
+            print(color(f'\n  Mirror is live at {stats["feed_url"]}', '32'))
             if stats['assets_failed']:
-                print(f'  Warning: {stats["assets_failed"]} assets failed to download; '
-                      'their URLs still point at the source host. Re-run to retry.')
+                print(color(f'  Warning: {stats["assets_failed"]} assets failed to download; '
+                            'their URLs still point at the source host. Re-run to retry.', '33'))
         except Exception as e:
-            print(f'\n  Sync failed: {e}')
+            print(color(f'\n  Sync failed: {e}', '31'))
         print()
 
     elif action == 'Promote mirror to primary':
@@ -927,7 +975,7 @@ def mirror_menu():
             try:
                 promotegen.promote_mirror(log=print)
             except Exception as e:
-                print(f'\n  Promote failed: {e}')
+                print(color(f'\n  Promote failed: {e}', '31'))
             print()
         else:
             print('\n  Cancelled.\n')
@@ -943,10 +991,7 @@ def mirror_menu():
 # ─── First-run wizard ─────────────────────────────────────────────────────────
 
 def first_run_wizard():
-    print('\n╔══════════════════════════════════════╗')
-    print('║     Welcome to Termicast!            ║')
-    print('║     Let\'s get you set up.            ║')
-    print('╚══════════════════════════════════════╝')
+    divider('Welcome to Termicast!')
     print("""
   This looks like your first time running Termicast.
   We need a few basics before you can do anything else.
@@ -1012,16 +1057,56 @@ def first_run_wizard():
 # ─── Main menu ────────────────────────────────────────────────────────────────
 
 def main():
+    banner()
     # First-run wizard fires automatically if podcast.json doesn't exist yet
     if store.is_first_run():
-        first_run_wizard()
-
-    print('\n╔══════════════════════════════════════╗')
-    print('║   Termicast - Podcast Feed Manager   ║')
-    print('╚══════════════════════════════════════╝')
+        try:
+            first_run_wizard()
+        except (CancelAction, KeyboardInterrupt):
+            print('\n  Setup cancelled. Run Termicast again when ready.\n')
+            return
 
     while True:
-        action = prompt_choice('\nWhat do you want to do?', [
+        data = store.load()
+        now = datetime.now(timezone.utc)
+        scheduled = 0
+        for episode in data['episodes']:
+            try:
+                scheduled += store.episode_date(episode) > now
+            except (TypeError, ValueError, OverflowError):
+                pass
+        dashboard(data['show'].get('title'), len(data['episodes']), scheduled,
+                  (data.get('mirror') or {}).get('sourceUrl'), os.path.isfile(feedgen.FEED_FILE))
+        try:
+            action = main_choice()
+        except (CancelAction, KeyboardInterrupt):
+            print(color('\n  Already at the main menu. Choose Exit to quit.', '33'))
+            continue
+
+        if action == 'Exit':
+            print('\n  Bye.\n')
+            sys.exit(0)
+        try:
+            if action == 'Add episode':
+                add_episode()
+            elif action == 'Edit episode':
+                edit_episode()
+            elif action == 'Delete episode':
+                delete_episode()
+            elif action == 'List episodes':
+                list_episodes()
+            elif action == 'Edit show settings':
+                setup_show()
+            elif action == 'Import from RSS feed':
+                import_from_rss()
+            elif action == 'Mirror external feed':
+                mirror_menu()
+        except (CancelAction, KeyboardInterrupt):
+            print(color('\n  Cancelled. Returning to main menu; completed work is kept.', '33'))
+
+
+def main_choice():
+    return prompt_choice('CONTROL ROOM / Choose a number', [
             'Add episode',
             'Edit episode',
             'Delete episode',
@@ -1030,26 +1115,16 @@ def main():
             'Import from RSS feed',
             'Mirror external feed',
             'Exit'
-        ])
-
-        if action == 'Exit':
-            print('\n  Bye.\n')
-            sys.exit(0)
-        elif action == 'Add episode':
-            add_episode()
-        elif action == 'Edit episode':
-            edit_episode()
-        elif action == 'Delete episode':
-            delete_episode()
-        elif action == 'List episodes':
-            list_episodes()
-        elif action == 'Edit show settings':
-            setup_show()
-        elif action == 'Import from RSS feed':
-            import_from_rss()
-        elif action == 'Mirror external feed':
-            mirror_menu()
-
+        ], groups={
+            'Add episode': 'PUBLISH & MANAGE',
+            'Edit episode': 'PUBLISH & MANAGE',
+            'Delete episode': 'PUBLISH & MANAGE',
+            'List episodes': 'PUBLISH & MANAGE',
+            'Edit show settings': 'CONFIGURATION',
+            'Import from RSS feed': 'MIRROR & MIGRATION',
+            'Mirror external feed': 'MIRROR & MIGRATION',
+            'Exit': 'SESSION',
+        })
 
 if __name__ == '__main__':
     try:
