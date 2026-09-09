@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+ xmlns:podcast="https://podcastindex.org/namespace/1.0"
+ xmlns:atom="http://www.w3.org/2005/Atom"
+ xmlns:content="http://purl.org/rss/1.0/modules/content/"
+ xmlns:custom="https://example.org/extensions">
+ <channel>
+  <title>Representative &amp; Friends</title>
+  <description><![CDATA[<p>A show about <b>sound</b> & stories.</p>]]></description>
+  <link>https://example.org/show</link>
+  <language>en-GB</language>
+  <copyright>Copyright Example</copyright>
+  <atom:link rel="self" href="https://old.example.org/podcast/feed.xml" type="application/rss+xml"/>
+  <atom:link rel="hub" href="https://hub.example.org/"/>
+  <itunes:author>Example Author</itunes:author>
+  <itunes:owner><itunes:name>Example Owner</itunes:name><itunes:email>owner@example.org</itunes:email><custom:ownerNote>keep</custom:ownerNote></itunes:owner>
+  <itunes:image href="https://example.org/art.jpg"/>
+  <image><url>https://example.org/art.jpg</url><title>Representative &amp; Friends</title><link>https://example.org/show</link><width>144</width></image>
+  <itunes:explicit>no</itunes:explicit>
+  <itunes:type>serial</itunes:type>
+  <itunes:category text="Arts"><itunes:category text="Performing Arts"/></itunes:category>
+  <itunes:category text="Music"/>
+  <itunes:category text="History"/>
+  <podcast:guid>5eaf7b5e-cc24-5e12-9c73-96c1f81c3b12</podcast:guid>
+  <podcast:locked owner="owner@example.org">yes</podcast:locked>
+  <podcast:medium>music</podcast:medium>
+  <podcast:funding url="https://example.org/support">Support us</podcast:funding>
+  <podcast:funding url="https://example.org/other">Other support</podcast:funding>
+  <podcast:podroll><podcast:remoteItem feedGuid="abb3b224-87f9-5afd-9b57-fdc3c52d98ae" feedUrl="https://friend.example.org/feed.xml" title="A Friend" medium="podcast"/></podcast:podroll>
+  <podcast:value type="lightning" method="keysend" suggested="0.00000005000"><podcast:valueRecipient name="Example" type="node" address="abc123" split="100"/></podcast:value>
+  <podcast:location geo="geo:51.5,-0.1" osm="R123">London</podcast:location>
+  <podcast:txt purpose="verify">verification-token</podcast:txt>
+  <custom:metadata flag="yes"><custom:nested>Unknown &amp; important</custom:nested></custom:metadata>
+  <!-- Preserve this channel comment. -->
+  <item>
+   <title>An imported episode with a non-UUID identity</title>
+   <guid isPermaLink="false">rss-host-original-id-42</guid>
+   <description><![CDATA[<p>Original & unmodified.</p>]]></description>
+   <content:encoded><![CDATA[<p>Full original text.</p>]]></content:encoded>
+   <link>https://example.org/episodes/42</link>
+   <enclosure url="https://example.org/42.mp3" length="123456" type="audio/mpeg"/>
+   <pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>
+   <itunes:duration>01:02:03</itunes:duration>
+   <podcast:value type="lightning" method="keysend"><podcast:valueRecipient type="node" address="def456" split="100"/></podcast:value>
+   <podcast:location>Somewhere</podcast:location>
+   <podcast:txt>episode-token</podcast:txt>
+   <custom:episodeData>retain this</custom:episodeData>
+  </item>
+ </channel>
+</rss>

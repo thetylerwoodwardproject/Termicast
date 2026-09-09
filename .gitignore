@@ -1,13 +1,11 @@
-# Python bytecode
 __pycache__/
 *.py[cod]
-
-# Generated at runtime (not source)
-podcast.json
-feed.xml
-media/
-mirror/
-activity.log.jsonl
-
-# Test artifacts
 .pytest_cache/
+.venv/
+venv/
+framework/
+*.egg-info/
+dist/
+build/
+build.md
+termicast/B/
