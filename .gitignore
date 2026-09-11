@@ -3,9 +3,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-framework/
 *.egg-info/
 dist/
 build/
-build.md
-termicast/B/

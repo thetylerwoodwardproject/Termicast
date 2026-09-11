@@ -19,11 +19,13 @@ from .csvio import export_csv, import_csv
 from .migration import migration_guidance
 from .models import new_show
 from .prompts import (
-    ACCENT, confirm, console, edit_field, episode_form, error, menu, show_form, text,
+    ACCENT, confirm, console, edit_field, error, menu, show_form, text,
     warning, menu_utilities, show_faq, ExitRequested, edit_episode_form, optional_assets,
+    add_episode, episode_form, hosting_menu,
 )
 from .publisher import Publisher
 from .repair import scan_show, repair_show
+from .hosting import doctor
 
 
 def _review_titles(changes):
@@ -80,15 +82,16 @@ def _check_repair(db, show):
     destination = output_dir or show["output_dir"]
     console.print(f"Regenerate: {destination}/feed.xml and saved chapter JSON\nPublic base URL: {show['base_url']}", markup=False)
     for target, source in recoveries.items():
-        relative = Path(target).relative_to(show["output_dir"])
-        console.print(f"Copy {source} -> {Path(destination) / relative}\nURL: {show['base_url'].rstrip('/')}/{relative.as_posix()}", markup=False)
+        from .storage import asset_root, asset_base
+        relative = Path(target).relative_to(asset_root(show))
+        console.print(f"Copy {source} -> {asset_root(show) / relative}\nURL: {asset_base(show)}/{relative.as_posix()}", markup=False)
     if not confirm("Back up saved state/feeds/chapters, apply selected fixes and regenerate WITHOUT releasing scheduled episodes?", False):
         return
     backup, result = repair_show(db, scan, selected, recoveries, output_dir)
     console.print(f"Backup: {backup}", markup=False)
     for issue in result["issues"]:
         warning(issue)
-    console.print(f"Repair complete: {len(selected)} title fixes; {len(recoveries)} local files recovered; {len(result['issues'])} remaining issues. Missing media/transcripts without a supplied source are irrecoverable from saved metadata; supply files or edit their URLs.", markup=False)
+    console.print(f"Repair complete: {len(selected)} title fixes; {len(recoveries)} local files recovered; {len(result['issues'])} remaining issues.", markup=False)
 
 
 def _backup(db, destination=None, include_media=False):
@@ -190,12 +193,12 @@ def _open_show(db, publisher, show):
     while True:
         show = db.get_show(show["id"])
         action = menu(show["title"], ["New episode", "Episodes", "Podcast settings",
-                                    "Tools", "Switch podcast / Back"])
+                                      "Hosting", "Tools", "Switch podcast / Back"])
         try:
-            if action == 5:
+            if action == 6:
                 return
             if action == 1:
-                episode_form(show, publisher)
+                episode_form(show, publisher, db)
             elif action == 2:
                 _episodes(db, publisher, show)
             elif action == 3:
@@ -205,6 +208,8 @@ def _open_show(db, publisher, show):
                     publisher.regenerate(updated["id"])
                     console.print("Settings saved and feed regenerated.", style=ACCENT)
             elif action == 4:
+                hosting_menu(db, publisher, show)
+            elif action == 5:
                 _tools(db, publisher, show)
         except EOFError:
             raise
@@ -218,27 +223,47 @@ def _create_or_import(db, publisher, importing=False):
     episodes = None
     if importing:
         destination = new_show()
-        console.print("Choose a NEW media directory and its public HTTPS directory URL first. All supported assets will be downloaded.", markup=False)
+        console.print("Choose the feed directory and its public HTTPS directory URL. Existing website directories are allowed; feed.xml must not exist. Hosting is configured next.", markup=False)
         edit_field(destination, "output_dir")
         edit_field(destination, "base_url")
-        source = text("Existing feed (HTTPS URL or local XML path)", required=True)
-        settings, template = import_feed(source)
-        show = new_show(**settings)
-        # Explicitly retain all extracted values, including imported identity.
-        show.update(settings)
-        console.print("Choose the NEW hosting location; imported identity and XML are retained.",
-                      style=ACCENT)
-        show["output_dir"] = destination["output_dir"]
-        show["base_url"] = destination["base_url"]
-        show = show_form(show)
+        from .prompts import hosting_form
+        hosting_form(destination)
+        kind = menu("Import source", ["Feed (HTTPS URL or local XML)", "Archive manifest (local files)"], 1)
+        if kind == 2:
+            manifest = text("Archive manifest path (manifest.json)", required=True)
+            from .archive import archive_identity, import_archive
+            settings = archive_identity(manifest)
+            show = new_show(**settings)
+            show.update(settings)
+            show["output_dir"] = destination["output_dir"]
+            show["base_url"] = destination["base_url"]
+            show.update({key: value for key, value in destination.items()
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "enabled")})
+            show = show_form(show)
+            if show is None:
+                return
+            show, episodes, template = import_archive(show, manifest)
+        else:
+            source = text("Existing feed (HTTPS URL or local XML path)", required=True)
+            settings, template = import_feed(source)
+            show = new_show(**settings)
+            show.update(settings)
+            console.print("Choose the NEW hosting location; imported identity and XML are retained.",
+                          style=ACCENT)
+            show["output_dir"] = destination["output_dir"]
+            show["base_url"] = destination["base_url"]
+            show.update({key: value for key, value in destination.items()
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "enabled")})
+            show = show_form(show)
+            if show is None:
+                return
+            show, episodes = download_import(show, template, review_titles=_review_titles,
+                                             review_optional=lambda episodes, root: _review_optional(episodes, root, show),
+                                             resolve_optional=_resolve_optional)
     else:
         show = show_form(new_show(), collect=True)
-    if show is None:
-        return
-    if importing:
-        show, episodes = download_import(show, template, review_titles=_review_titles,
-                                         review_optional=lambda episodes, root: _review_optional(episodes, root, show),
-                                         resolve_optional=_resolve_optional)
+        if show is None:
+            return
     db.save_show(show, template=template, episodes=episodes)
     publisher.regenerate(show["id"])
     console.print("Podcast saved and feed generated.", style=ACCENT)
@@ -317,6 +342,27 @@ def main(argv=None):
     commands.add_parser("faq", help="Read frequently asked questions, including backup and recovery.")
     validate = commands.add_parser("validate", help="Validate one or all managed output feeds.")
     validate.add_argument("show_id", nargs="?", help="Podcast ID; omit to validate all feeds.")
+    add = commands.add_parser("add", help="Create an episode from local media files.")
+    add.add_argument("show_id")
+    add.add_argument("files", nargs="+", help="Audio (required), then optional artwork and transcript.")
+    add.add_argument("--slug", help="Editorial slug such as s02ep042.")
+    add.add_argument("--audio-preset", choices=("standard", "music"), help="Override the show's audio preset.")
+    add.add_argument("--image-preset", choices=("compact", "detail"), help="Override the show's image preset.")
+    add.add_argument("--keep-audio", action="store_true", help="Keep the original audio instead of optimizing.")
+    add.add_argument("--keep-image", action="store_true", help="Keep the original artwork instead of optimizing.")
+    deploy = commands.add_parser("deploy", help="Upload saved assets then the feed; verify by default.")
+    deploy.add_argument("show_id")
+    deploy.add_argument("--dry-run", action="store_true", help="No uploads or bucket probes.")
+    deploy.add_argument("--no-verify", action="store_true", help="Skip post-deploy public verification.")
+    doctor_cmd = commands.add_parser("doctor", help="Read-only hosting and media checks.")
+    doctor_cmd.add_argument("show_id", nargs="?", help="Podcast ID; omit to check all shows.")
+    archive = commands.add_parser("archive", help="Download a feed and assets into a persistent archive.")
+    archive.add_argument("source", help="Feed HTTPS URL or local XML path.")
+    archive.add_argument("destination", help="Archive directory.")
+    restage_cmd = commands.add_parser("restage", help="Preview URL restaging from an archive manifest.")
+    restage_cmd.add_argument("manifest", help="Path to the archive manifest.json.")
+    restage_cmd.add_argument("base_url", help="Public base URL for the restaged feed.")
+
     args = parser.parse_args(argv)
     if args.data_dir is not None:
         os.environ["TERMICAST_HOME"] = str(Path(args.data_dir).expanduser())
@@ -324,13 +370,48 @@ def main(argv=None):
         if args.command == "faq":
             show_faq()
             return 0
+        if args.command == "archive":
+            from .archive import archive_feed
+            console.print(f"Archive written: {archive_feed(args.source, args.destination)}",
+                          style=ACCENT, markup=False)
+            return 0
+        if args.command == "restage":
+            from .archive import restage
+            mapping, errors = restage(args.manifest, args.base_url)
+            for original, new in sorted(mapping.items()):
+                console.print(f"{original} -> {new}", markup=False)
+            for message in errors:
+                error(message)
+            return 1 if errors else 0
         db = Database()
         if args.command == "backup":
             _backup(db, args.destination, args.include_media)
             return 0
         if args.command == "validate":
             return _validate(db, args.show_id)
+        if args.command == "doctor":
+            problems = doctor(db, args.show_id)
+            if problems:
+                for problem in problems:
+                    warning(problem)
+                return 1
+            console.print("No hosting problems found.", style=ACCENT)
+            return 0
         publisher = Publisher(db)
+        if args.command == "add":
+            show = db.get_show(args.show_id)
+            if show is None:
+                error(f"Unknown podcast ID: {args.show_id}")
+                return 1
+            add_episode(db, publisher, show, args.files, slug=args.slug,
+                        audio_preset=args.audio_preset, image_preset=args.image_preset,
+                        keep_audio=args.keep_audio, keep_image=args.keep_image)
+            return 0
+        if args.command == "deploy":
+            publisher.deploy(args.show_id, dry_run=args.dry_run, verify=not args.no_verify)
+            console.print("Deployed." if not args.dry_run else "Dry run complete: no uploads or bucket probes were made.",
+                          style=ACCENT)
+            return 0
         if args.command == "import-csv":
             console.print(f"Merged {import_csv(db, args.show_id, args.path, review_titles=_review_titles)} episodes.")
             return 0

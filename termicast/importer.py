@@ -10,6 +10,7 @@ from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 
 from .feed import MAX_FEED_BYTES, _parse_xml, _tag, _put
@@ -185,18 +186,31 @@ def extract_episodes(template, mapping=None):
     return episodes
 
 
-def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None):
+def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None,
+                    preseed=None, require_preseed=False):
     """Stage every supported asset before installing a new public directory.
 
     The original XML stays untouched. Exact URL substitutions are persisted in
     show settings so unknown XML can survive rehosting and subsequent edits.
+    `preseed` maps original URLs to `(source_path, relative_path)` pairs already
+    staged locally (the archive adapter); those are copied, never re-downloaded.
     """
     errors = validation.validate_show(show)
     if errors:
         raise ValueError("; ".join(errors))
+    from .storage import asset_root, asset_base
     output = Path(show["output_dir"]).expanduser().absolute()
-    if output.exists() or output.is_symlink():
+    assets = asset_root(show)
+    if (not show.get("hosting") and output.exists()) or output.is_symlink():
         raise ValueError("Import requires a new, nonexistent output directory")
+    if (output / "feed.xml").exists() or (output / "feed.xml").is_symlink():
+        raise ValueError("Destination feed.xml already exists")
+    for root_path in (output, assets):
+        if any(p.is_symlink() for p in (root_path, *root_path.parents)):
+            raise ValueError("Import destinations must not use symbolic links")
+    if show.get("hosting") == "s3":
+        from .s3deploy import check_s3_destination
+        check_s3_destination(show)
     output.parent.mkdir(parents=True, exist_ok=True)
     root = _parse_xml(template)
     mapping, local_paths, metadata = {}, {}, {}
@@ -219,6 +233,22 @@ def download_import(show, template, review_titles=None, review_optional=None, re
                 return ""
             if url in mapping:
                 path = local_paths[url]
+            elif preseed is not None and url in preseed:
+                source, relative = preseed[url]
+                path = stage / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with path.open("xb") as handle, Path(source).open("rb") as original:
+                        shutil.copyfileobj(original, handle)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                except Exception:
+                    path.unlink(missing_ok=True)
+                    raise
+                mapping[url] = asset_base(show) + "/" + relative
+                local_paths[url] = path
+            elif require_preseed:
+                raise ValueError(f"Archive is missing a staged asset for {url}")
             else:
                 suffix = Path(urlsplit(url).path).suffix.lower()
                 if suffix not in (".mp3", ".jpg", ".jpeg", ".png", ".json", ".vtt", ".srt", ".txt", ".html", ".pdf"):
@@ -233,7 +263,7 @@ def download_import(show, template, review_titles=None, review_optional=None, re
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
-                mapping[url] = show["base_url"].rstrip("/") + "/" + relative
+                mapping[url] = asset_base(show) + "/" + relative
                 local_paths[url] = path
             if kind:
                 validation.inspect_local_artwork(path, episode=kind == "episode", chapter=kind == "chapter")
@@ -320,11 +350,42 @@ def download_import(show, template, review_titles=None, review_optional=None, re
             errors = validation.validate_episode(episode)
             if errors:
                 raise ValueError("; ".join(errors))
-        show = dict(show, output_dir=str(output), import_url_map=mapping)
+        files = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file())
+        from .models import chapter_filename
+        generated = ["chapters/" + chapter_filename(e["guid"]) for e in episodes if e.get("chapters")]
+        generated += ["transcripts/" + chapter_filename(e["guid"]) + ".vtt" for e in episodes if e.get("_transcript_vtt")]
+        for relative in set(files + generated):
+            target = assets / relative
+            if target.exists() or any(p.is_symlink() for p in (target, *target.parents)):
+                raise ValueError(f"Asset destination already exists or uses symbolic links: {target}")
+        show = dict(show, output_dir=str(output), import_url_map=mapping, asset_files=files)
         show["artwork_url"] = mapping.get(show["artwork_url"], show["artwork_url"])
         from .feed import render_feed
         render_feed(show, template, episodes, datetime.now(timezone.utc))
-        os.rename(stage, output)
+        if assets == output and not output.exists():
+            os.rename(stage, output)
+        else:
+            for relative in files:
+                target = assets / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, temporary_file = tempfile.mkstemp(prefix=".termicast-install-", dir=target.parent)
+                try:
+                    with os.fdopen(fd, "wb") as destination, (stage / relative).open("rb") as source_file:
+                        shutil.copyfileobj(source_file, destination)
+                        destination.flush()
+                        os.fchmod(destination.fileno(), 0o644)
+                        os.fsync(destination.fileno())
+                    os.link(temporary_file, target)
+                    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    Path(temporary_file).unlink(missing_ok=True)
+            for folder in ("audio", "images", "transcripts", "chapters"):
+                (assets / folder).mkdir(parents=True, exist_ok=True)
+            output.mkdir(parents=True, exist_ok=True)
         directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)

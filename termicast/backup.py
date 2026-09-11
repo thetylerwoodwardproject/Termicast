@@ -11,7 +11,8 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from .database import filesystem_lock
-from .models import chapter_filename
+from .models import chapters_relative, transcript_relative
+from .storage import asset_root
 
 
 def create_backup(db, destination=None, include_media=False, *, _locked=False):
@@ -26,6 +27,11 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
     with (nullcontext() if _locked else db.lock()), ExitStack() as locks:
         shows = db.list_shows()
         for show in shows:
+            assets = asset_root(show)
+            if destination.is_relative_to(assets.resolve()):
+                raise ValueError("Backups must be outside every podcast's public asset directory")
+            if assets.is_symlink():
+                raise ValueError("Refusing symbolic-link asset directory")
             output = Path(show["output_dir"])
             if destination.is_relative_to(output.resolve()):
                 raise ValueError("Backups must be outside every podcast's public output directory")
@@ -38,7 +44,6 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                     "source_database": str(db.path), "shows": [], "missing_files": [],
                     "include_media": include_media,
                     "excludes": ["unsaved forms", "externally hosted assets"] + ([] if include_media else ["local media"])}
-        # Staging is private, including the SQLite copy, and on the target filesystem.
         with tempfile.TemporaryDirectory(prefix=".termicast-backup-", dir=destination) as staging:
             snapshot = Path(staging) / "termicast.db"
             target = sqlite3.connect(snapshot)
@@ -57,14 +62,15 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                         prefix = f"outputs/{show['id']}"
                         manifest["shows"].append({"id": show["id"], "title": show["title"],
                                                   "output_dir": str(output), "archive_dir": prefix})
-                        chapters = output / "chapters"
+                        assets = asset_root(show)
+                        chapters = assets / "chapters"
                         if chapters.is_symlink():
                             raise ValueError(f"Refusing symbolic-link chapters directory: {chapters}")
                         files = [output / "feed.xml"]
                         files.extend(sorted(chapters.glob("*.json")))
                         if include_media:
                             for folder in ("audio", "images", "transcripts"):
-                                root = output / folder
+                                root = assets / folder
                                 if root.is_symlink():
                                     raise ValueError(f"Refusing symbolic-link media directory: {root}")
                                 for directory, dirs, names in os.walk(root, followlinks=False):
@@ -76,7 +82,11 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                                     files.extend(Path(directory) / name for name in names if not name.startswith("."))
                         for episode in db.list_episodes(show["id"]):
                             if episode["status"] == "published" and episode.get("chapters"):
-                                expected = chapters / chapter_filename(episode['guid'])
+                                expected = assets / chapters_relative(episode)
+                                if expected not in files:
+                                    files.append(expected)
+                            if episode.get("_transcript_vtt"):
+                                expected = assets / transcript_relative(episode)
                                 if expected not in files:
                                     files.append(expected)
                         for path in files:
@@ -87,12 +97,12 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                                 continue
                             if not path.is_file():
                                 raise ValueError(f"Expected a regular output file: {path}")
-                            archive.write(path, f"{prefix}/{path.relative_to(output).as_posix()}")
+                            relative = "feed.xml" if path == output / "feed.xml" else path.relative_to(assets).as_posix()
+                            archive.write(path, f"{prefix}/{relative}")
                     archive.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             result = destination / name
-            # A link publishes the complete archive without overwriting any backup.
             os.link(archive_path, result)
             directory = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
             try:

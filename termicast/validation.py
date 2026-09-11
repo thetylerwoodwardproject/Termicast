@@ -86,10 +86,7 @@ def parse_time(text: str) -> float:
 
 
 def local_to_utc(text: str, timezone: str) -> datetime:
-    """Convert ISO local time to UTC, rejecting DST gaps and unresolved folds.
-
-    An explicit offset must match the requested zone at that local wall time.
-    """
+    """Convert ISO local time to UTC, rejecting DST gaps and unresolved folds."""
     try:
         zone = ZoneInfo(timezone)
         parsed = datetime.fromisoformat(text)
@@ -153,6 +150,9 @@ def validate_show(show) -> list[str]:
                   output_dir=4096, category=100, subcategory=100, secondary_category=100)
     limits.update(dict.fromkeys(urls, 2048))
     errors = _fields(show, limits, ("title", "description", "base_url", "output_dir"), urls)
+    from .storage import validate_storage
+    errors.extend(validate_storage(show))
+    errors.extend(validate_presets(show))
     if validate_https(show.get("base_url")):
         base = urlsplit(show["base_url"])
         if base.query or base.fragment:
@@ -198,6 +198,15 @@ def validate_show(show) -> list[str]:
     return errors
 
 
+def validate_presets(show) -> list[str]:
+    errors = []
+    if show.get("audio_preset", "standard") not in ("standard", "music"):
+        errors.append("audio_preset must be standard or music")
+    if show.get("image_preset", "compact") not in ("compact", "detail"):
+        errors.append("image_preset must be compact or detail")
+    return errors
+
+
 def validate_episode(episode) -> list[str]:
     if not isinstance(episode, dict):
         return ["episode must be a dictionary"]
@@ -206,6 +215,12 @@ def validate_episode(episode) -> list[str]:
                      ("title", "description", "mp3_url"), urls)
     if not isinstance(episode.get("guid"), str) or not episode["guid"].strip() or any(ord(c) < 32 for c in episode["guid"]):
         errors.append("guid must be nonempty text without control characters")
+    slug = episode.get("slug")
+    if slug:
+        from .models import slug_error
+        reason = slug_error(slug)
+        if reason:
+            errors.append(f"slug {reason}")
     if episode.get("episode_type") not in ("full", "trailer", "bonus"):
         errors.append("episode_type must be full, trailer or bonus")
     for field in ("length", "episode_number", "season_number"):
@@ -321,7 +336,7 @@ def probe_local_media(path):
         process = subprocess.run(
             ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
              "format=duration", "-of", "json", str(path)],
-            capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True)
+            capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True, stdin=subprocess.DEVNULL)
         duration = float(json.loads(process.stdout)["format"]["duration"])
         if _number(duration, positive=True):
             result["duration"] = duration
@@ -345,11 +360,7 @@ def inspect_local_artwork(path, episode=False, chapter=False):
 
 
 def probe_media(url) -> dict:
-    """Best-effort positive byte length/duration; missing values need manual input.
-
-    Size, overall download deadline, and socket stall timeout are configurable.
-    ffprobe runs on the local download only; it cannot access URLs.
-    """
+    """Best-effort positive byte length/duration; missing values need manual input."""
     if not validate_https(url):
         raise ValueError("Media URL must use HTTPS")
     result = {}
@@ -372,6 +383,7 @@ def probe_media(url) -> dict:
                 ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
                  "format=duration", "-of", "json", media.name],
                 capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True,
+                stdin=subprocess.DEVNULL,
             )
             duration = float(json.loads(process.stdout)["format"]["duration"])
             if _number(duration, positive=True):
@@ -382,10 +394,7 @@ def probe_media(url) -> dict:
 
 
 def inspect_artwork(url, episode=False) -> list[str]:
-    """Inspect via Pillow; return warnings if unavailable, raise on bad dimensions.
-
-    Downloads are limited to 20 MiB. No network access occurs in validators.
-    """
+    """Inspect via Pillow; return warnings if unavailable, raise on bad dimensions."""
     if not validate_https(url):
         raise ValueError("Artwork URL must use HTTPS")
     try:

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import math
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from rich.console import Console
@@ -12,7 +13,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
-from .models import new_episode, new_show
+from .models import new_episode, new_show, slug_error, suggest_slug
 from .faq import FAQ
 from .validation import (
     CATEGORIES, inspect_artwork, local_to_utc, parse_time, probe_media,
@@ -40,22 +41,37 @@ def menu_utilities(backup_action):
 def show_faq():
     console.print(Markdown(FAQ))
 
+
 SHOW_FIELDS = (
     "title", "description", "author", "owner_name", "owner_email", "website",
     "copyright", "artwork_url", "locked", "explicit", "language", "podcast_type",
     "timezone", "category", "subcategory", "secondary_category", "funding_url",
-    "funding_label", "podroll", "output_dir", "base_url",
+    "funding_label", "podroll", "output_dir", "base_url", "audio_preset",
+    "image_preset", "hosting",
 )
 EPISODE_FIELDS = (
     "title", "description", "link", "mp3_url", "length", "duration", "episode_type",
     "episode_number", "season_number", "explicit", "artwork_url", "transcript_url",
     "keywords", "soundbites", "chapters",
 )
+EPISODE_DETAIL_FIELDS = (
+    "title", "description", "link", "episode_type", "episode_number", "season_number",
+    "explicit", "keywords",
+)
 SHOW_ESSENTIALS = (
     "title", "description", "author", "owner_email", "artwork_url",
     "explicit", "timezone", "category", "output_dir", "base_url",
 )
-EPISODE_ESSENTIALS = ("title", "description", "mp3_url")
+
+EXPORT_NOTICE = (
+    "Smaller files help listeners on slower connections and reduce hosting bandwidth. "
+    "Standard audio uses MP3 at 128 kbps and 44.1 kHz. Compact artwork targets JPEG "
+    "below 500 KB. You can change these presets or keep compatible original files."
+)
+
+
+def show_export_notice():
+    console.print(EXPORT_NOTICE, style="yellow", markup=False)
 
 
 def missing_media_metadata(episode):
@@ -123,7 +139,6 @@ def confirm(label, default=False):
 
 def choice(label, values, current="", optional=False):
     values = list(values)
-    # Keep extracted values visible until the user chooses to change them.
     if current and current not in values:
         values.append(current)
     if optional:
@@ -265,11 +280,15 @@ def _segments(current, soundbites):
 def edit_field(data, field, episode=False):
     current = data.get(field)
     label = field.replace("_", " ").title()
-    if field in ("locked", "explicit"):
+    if field in ("locked", "explicit", "enabled"):
         data[field] = confirm(label, bool(current))
     elif field in ("podcast_type", "episode_type"):
         data[field] = choice(label, ["full", "trailer", "bonus"] if episode else
                              ["episodic", "serial"], current)
+    elif field in ("audio_preset",):
+        data[field] = choice(label, ["standard", "music"], current)
+    elif field in ("image_preset",):
+        data[field] = choice(label, ["compact", "detail"], current)
     elif field in ("category", "secondary_category", "subcategory"):
         values = CATEGORIES.get(data.get("category"), []) if field == "subcategory" else CATEGORIES
         data[field] = choice(label, values, current, optional=field != "category")
@@ -319,7 +338,6 @@ def edit_field(data, field, episode=False):
                     break
             error(f"Maximum length is {limit} raw characters, including HTML and URLs.")
         if field == "mp3_url":
-            # A changed enclosure must not inherit metadata from the previous MP3.
             if current != data[field]:
                 data["length"] = None
                 data["duration"] = None
@@ -341,9 +359,36 @@ def edit_menu(data, fields, episode=False):
                     + ["Back"])
     if selected <= len(fields):
         field = fields[selected - 1]
+        if field == "hosting":
+            hosting_form(data)
+            return
         edit_field(data, field, episode)
         if field == "mp3_url":
             missing_media_metadata(data)
+
+
+def hosting_form(data):
+    """Collect nonsecret destination settings; never ask for credentials."""
+    from .storage import validate_storage
+    selected = menu("Hosting", ["Local web server", "S3-compatible storage"],
+                    2 if data.get("hosting") == "s3" else 1)
+    data["hosting"] = "s3" if selected == 2 else "local"
+    if selected == 2:
+        console.print("Configure credentials OUTSIDE Termicast in ~/.s3cfg (s3cmd format). "
+                      "Never paste keys here. The publishing/cron account needs the same "
+                      "credentials. Use a dedicated show prefix and configure public reads.\n"
+                      "Example ~/.s3cfg: access_key, secret_key, host_base, host_bucket.", markup=False)
+        for field, label in (("endpoint_url", "HTTPS S3 API endpoint (blank for AWS; e.g. https://us-east-1.linodeobjects.com)"),
+                             ("bucket", "Bucket name"),
+                             ("prefix", "Show prefix (optional, no outer slashes)")):
+            data[field] = text(label, data.get(field, ""), required=field == "bucket")
+        data["enabled"] = confirm("Automatically deploy on publish/schedule?", bool(data.get("enabled", False)))
+    else:
+        for field in ("endpoint_url", "bucket", "prefix", "enabled"):
+            data.pop(field, None)
+    errors = validate_storage(data)
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def show_form(show, collect=False):
@@ -391,7 +436,7 @@ def schedule_time(show, *, confirm_time=True):
 def optional_assets(episode, show):
     """Keep additions in the review record until the episode is saved."""
     from .assets import read_asset, read_chapters, check_vtt
-    from .models import chapter_filename
+    from .models import chapters_relative
 
     action = menu("Optional assets", ["Chapters JSON (local path or HTTPS URL)",
                                       "Chapters manually", "Transcript VTT (local path or HTTPS URL)", "Back"], 4)
@@ -409,9 +454,10 @@ def optional_assets(episode, show):
                 episode.setdefault("_replace_fields", []).append("chapters")
         elif action == 3:
             value = check_vtt(read_asset(text("VTT path or HTTPS URL", required=True)))
-            filename = chapter_filename(episode["guid"]) + ".vtt"
-            url = show["base_url"].rstrip("/") + "/transcripts/" + filename
-            console.print(f"On save: {show['output_dir']}/transcripts/{filename}\nPublic URL: {url}", markup=False)
+            from .storage import asset_base, asset_root
+            filename = chapters_relative(episode).split("/", 1)[1]
+            url = asset_base(show) + "/transcripts/" + filename
+            console.print(f"On save: {asset_root(show)}/transcripts/{filename}\nPublic URL: {url}", markup=False)
             if confirm("Save this transcript with the episode?", False):
                 episode.update(transcript_url=url, _transcript_vtt=value)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -430,25 +476,90 @@ def title_for_save(episode):
         edit_field(episode, "title", episode=True)
 
 
-def episode_form(show, publisher):
+def check_slug_collision(db, show_id, slug, exclude_guid=None):
+    for episode in db.list_episodes(show_id):
+        if episode["guid"] == exclude_guid:
+            continue
+        if episode.get("slug") == slug:
+            raise ValueError(f"Slug '{slug}' is already used by episode {episode['guid']}; choose another name")
+
+
+def _choose_slug(db, show, episode, explicit_slug):
+    if explicit_slug is not None:
+        reason = slug_error(explicit_slug)
+        if reason:
+            raise ValueError(f"Invalid slug: {reason}")
+        check_slug_collision(db, show["id"], explicit_slug)
+        return explicit_slug
+    suggested = suggest_slug(episode)
+    console.print(f"Suggested slug: {suggested}", style=ACCENT, markup=False)
+    while True:
+        value = text("Slug (letters, numbers, hyphens, underscores)", suggested, required=True)
+        reason = slug_error(value)
+        if reason:
+            error(f"Invalid slug: {reason}")
+            continue
+        try:
+            check_slug_collision(db, show["id"], value)
+            return value
+        except ValueError as exc:
+            error(exc)
+
+
+def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, image_preset=None,
+                keep_audio=False, keep_image=False):
+    """Create an episode from local files: prepare media, collect details, publish.
+
+    This is the shared implementation behind `termicast add` and the menu's
+    Add episode action. Audio is required; artwork and transcript are optional.
+    """
+    from .media import identify_files, prepare_media
+    from .storage import asset_base
+
+    roles = identify_files(files)
+    audio_preset = audio_preset or show.get("audio_preset", "standard")
+    image_preset = image_preset or show.get("image_preset", "compact")
+
     episode = new_episode(explicit=show.get("explicit", False))
-    for field in EPISODE_ESSENTIALS:
+    if slug is None:
+        episode["season_number"] = number("Season number (optional)", None, integer=True, optional=True, positive=True)
+        episode["episode_number"] = number("Episode number (optional)", None, integer=True, optional=True, positive=True)
+    chosen_slug = _choose_slug(db, show, episode, slug)
+    show_export_notice()
+
+    prepared = prepare_media(show, roles, slug=chosen_slug, audio_preset=audio_preset,
+                             image_preset=image_preset, keep_audio=keep_audio,
+                             keep_image=keep_image, progress=True)
+    review("Prepared media", prepared.review())
+    episode.update(slug=chosen_slug)
+    episode["mp3_url"] = asset_base(show) + "/" + prepared.audio_relative
+    episode["length"] = prepared.audio_after
+    episode["duration"] = prepared.audio_meta["duration"]
+    episode["audio_path"] = prepared.audio_relative
+    if prepared.image_relative:
+        episode["artwork_url"] = asset_base(show) + "/" + prepared.image_relative
+        episode["image_path"] = prepared.image_relative
+    if prepared.transcript_relative:
+        episode["transcript_url"] = asset_base(show) + "/" + prepared.transcript_relative
+        episode["transcript_path"] = prepared.transcript_relative
+
+    for field in ("title", "description"):
         edit_field(episode, field, episode=True)
-    missing_media_metadata(episode)
+
     while True:
         review("Episode review", episode)
         errors = validate_episode(episode)
         for message in errors:
             error(message)
-        action = menu("Episode review", ["Edit details / more options", "Publish now", "Schedule", "Cancel",
-                                         "Add chapters / transcript"], 1)
+        action = menu("Episode review", ["Edit details / more options", "Publish now", "Schedule",
+                                         "Cancel", "Add chapters / transcript"], 1)
         if action == 5:
             optional_assets(episode, show)
             continue
         if action == 4:
             return
         if action == 1:
-            edit_menu(episode, EPISODE_FIELDS, episode=True)
+            edit_menu(episode, EPISODE_DETAIL_FIELDS, episode=True)
             continue
         title_for_save(episode)
         errors = validate_episode(episode)
@@ -468,6 +579,20 @@ def episode_form(show, publisher):
         console.print(f"{'Scheduled' if when else 'Published'} episode {guid}",
                       style=ACCENT, markup=False)
         return
+
+
+def episode_form(show, publisher, db):
+    """Menu Add episode: prompt for local files, then the shared file flow."""
+    console.print("Add episode from local files. Local files must be on this machine. "
+                  "Audio is required; artwork and transcript are optional and identified by type.",
+                  markup=False)
+    audio = text("Audio file path (mp3, wav, flac, m4a, ogg, opus)", required=True)
+    paths = [audio]
+    if confirm("Add cover artwork file?", False):
+        paths.append(text("Artwork file path (JPEG/PNG)", required=True))
+    if confirm("Add a WebVTT transcript file?", False):
+        paths.append(text("Transcript file path (.vtt)", required=True))
+    add_episode(db, publisher, show, paths)
 
 
 def edit_episode_form(show, publisher, saved):
@@ -508,3 +633,46 @@ def edit_episode_form(show, publisher, saved):
             continue
         console.print("Episode saved.", style=ACCENT)
         return
+
+
+def hosting_menu(db, publisher, show):
+    """Hosting submenu: setup, deploy, checks, and guidance."""
+    from .hosting import doctor, nginx_snippet, apache_snippet
+    while True:
+        action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
+                                  "Hosting checks (doctor)", "Nginx MIME snippet",
+                                  "Apache MIME snippet", "Migration guidance", "Back"])
+        try:
+            if action == 8:
+                return
+            if action == 1:
+                data = dict(show)
+                hosting_form(data)
+                db.save_show(data)
+                publisher.regenerate(show["id"])
+                show = data
+                console.print("Hosting settings saved.", style=ACCENT)
+            elif action == 2:
+                publisher.deploy(show["id"])
+                console.print("Deployed.", style=ACCENT)
+            elif action == 3:
+                publisher.deploy(show["id"], dry_run=True)
+                console.print("Dry run complete: no uploads or bucket probes were made.", style=ACCENT)
+            elif action == 4:
+                problems = doctor(db, show["id"])
+                if problems:
+                    for problem in problems:
+                        warning(problem)
+                else:
+                    console.print("No hosting problems found.", style=ACCENT)
+            elif action == 5:
+                console.print(nginx_snippet(show), markup=False)
+            elif action == 6:
+                console.print(apache_snippet(show), markup=False)
+            elif action == 7:
+                from .migration import migration_guidance
+                console.print(migration_guidance(show), markup=False)
+        except ExitRequested:
+            raise
+        except Exception as exc:
+            error(f"Hosting action failed: {exc}")

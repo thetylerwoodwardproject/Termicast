@@ -11,7 +11,11 @@ from .models import new_episode
 from .publisher import Publisher, atomic_write
 from .validation import local_to_utc
 
-FIELDS = tuple(new_episode()) + ("published_at", "timezone", "status")
+# The CSV surface is URL-based and unchanged for compatibility; slug and
+# prepared asset paths are managed by the file-based episode workflow.
+FIELDS = ("title", "description", "link", "mp3_url", "artwork_url", "transcript_url",
+          "guid", "length", "duration", "episode_type", "episode_number", "season_number",
+          "explicit", "keywords", "soundbites", "chapters", "published_at", "timezone", "status")
 JSON_FIELDS = ("keywords", "chapters", "soundbites")
 
 
@@ -27,7 +31,9 @@ def export_csv(db, show_id, path, selection="all"):
     target = Path(path).expanduser().resolve()
     if target in (db.path, Path(str(db.path) + ".lock")):
         raise ValueError("CSV export cannot overwrite database state or its lock")
-    if any(target.is_relative_to(Path(s["output_dir"]).resolve()) for s in shows):
+    from .storage import asset_root
+    if any(target.is_relative_to(Path(s["output_dir"]).resolve()) or
+           target.is_relative_to(asset_root(s).resolve()) for s in shows):
         raise ValueError("CSV exports must stay outside public output directories")
     content = io.StringIO(newline="")
     writer = csv.DictWriter(content, fieldnames=FIELDS)

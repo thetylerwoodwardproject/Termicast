@@ -7,10 +7,11 @@ from urllib.parse import unquote, urlsplit
 
 from .backup import create_backup
 from .feed import _parse_xml, _tag, render_feed, validate_feed
-from .models import chapter_filename
+from .models import chapters_relative, transcript_relative
 from .publisher import Publisher
 from .database import filesystem_lock
 from .validation import validate_episode
+from .storage import asset_root, asset_base
 
 
 def scan_show(db, show_id):
@@ -33,10 +34,9 @@ def scan_show(db, show_id):
     except OSError as exc:
         issues.append(f"Feed needs regeneration: {exc}")
     published = [e for e in episodes if e["status"] == "published"]
-    regenerable = {str(output / "chapters" / chapter_filename(e["guid"]))
-                   for e in published if e.get("chapters")}
-    regenerable.update(str(output / "transcripts" / (chapter_filename(e["guid"]) + ".vtt"))
-                       for e in published if e.get("_transcript_vtt"))
+    assets = asset_root(show)
+    regenerable = {str(assets / chapters_relative(e)) for e in published if e.get("chapters")}
+    regenerable.update(str(assets / transcript_relative(e)) for e in published if e.get("_transcript_vtt"))
     try:
         root = _parse_xml(render_feed(show, template, published, datetime.now(timezone.utc),
                                      excluded_guids={e["guid"] for e in episodes if e["status"] != "published"}))
@@ -44,7 +44,7 @@ def scan_show(db, show_id):
         issues.append(f"Cannot regenerate from saved data: {exc}")
         return {"show": show, "episodes": episodes, "template": template, "fixes": fixes,
                 "issues": issues, "missing": missing}
-    base = urlsplit(show["base_url"].rstrip("/") + "/")
+    base = urlsplit(asset_base(show) + "/")
     for element in root.iter():
         if element.tag not in ("enclosure", _tag("podcast:chapters"), _tag("podcast:transcript"), _tag("itunes:image")):
             continue
@@ -53,8 +53,8 @@ def scan_show(db, show_id):
         if (parts.scheme, parts.netloc) != (base.scheme, base.netloc) or not parts.path.startswith(base.path):
             continue
         relative = Path(unquote(parts.path[len(base.path):]))
-        path = output / relative
-        if not path.resolve().is_relative_to(output.resolve()):
+        path = assets / relative
+        if not path.resolve().is_relative_to(assets.resolve()):
             issues.append(f"Unsafe local resource path: {url}")
         elif not path.is_file():
             issues.append(f"Referenced local resource missing: {path}")
@@ -64,7 +64,7 @@ def scan_show(db, show_id):
         elif relative.parts and relative.parts[0] not in ("audio", "chapters", "images", "transcripts"):
             issues.append(f"Referenced resource outside standard media directories: {path}")
     for episode in published:
-        if episode.get("chapters") and not (output / "chapters" / chapter_filename(episode["guid"])).is_file():
+        if episode.get("chapters") and not (assets / chapters_relative(episode)).is_file():
             issues.append(f"Saved chapters can be regenerated: {episode['guid']}")
     return {"show": show, "episodes": episodes, "template": template, "fixes": fixes,
             "issues": issues, "missing": missing}
@@ -108,11 +108,10 @@ def repair_show(db, scan, selected, recoveries=None, output_dir=None):
         output.mkdir(parents=True, exist_ok=True)
         with filesystem_lock(output / ".termicast.lock"):
             for destination, source in recoveries.items():
-                relative = Path(destination).relative_to(Path(show["output_dir"]))
-                target = output / relative
-                if not target.resolve().is_relative_to(output.resolve()) or target.exists():
+                relative = Path(destination).relative_to(asset_root(show))
+                target = asset_root(show) / relative
+                if not target.resolve().is_relative_to(asset_root(show).resolve()) or target.exists():
                     raise ValueError(f"Recovery destination is unsafe or no longer missing: {target}")
-                # Copy in bounded chunks, then atomically install; media can be large.
                 import os
                 import shutil
                 import tempfile

@@ -1,12 +1,20 @@
-"""RSS generation with preservation of imported podcast metadata."""
+"""RSS generation with preservation of imported podcast metadata.
+
+Managed chapters are published as Podcasting 2.0 JSON only; PSC chapter import
+remains supported but PSC start markers are no longer generated.
+"""
 
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 import math
+from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from lxml import etree
-from .models import chapter_filename
+from .models import chapter_filename, chapters_relative
+from .media import ENCLOSURE_TYPES
+from .storage import asset_base
 
 
 NS = {
@@ -73,12 +81,9 @@ def _seconds(value):
     return format(value, ".12g")
 
 
-def _chapter_time(value):
-    milliseconds = round(float(_seconds(value)) * 1000)
-    hours, remainder = divmod(milliseconds, 3600000)
-    minutes, remainder = divmod(remainder, 60000)
-    seconds, milliseconds = divmod(remainder, 1000)
-    return f"{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}"
+def enclosure_type(mp3_url):
+    suffix = Path(urlsplit(mp3_url).path).suffix.lower()
+    return ENCLOSURE_TYPES.get(suffix, "audio/mpeg")
 
 
 def render_feed(show: dict, template: bytes | None, episodes: list[dict],
@@ -96,7 +101,6 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
         root = _parse_xml(template)
         from .importer import rewrite_urls
         rewrite_urls(root, show.get("import_url_map", {}))
-        # Add our prefixes without stripping namespaces used by extensions.
         namespaces = dict(root.nsmap)
         for prefix, uri in NS.items():
             if uri not in namespaces.values():
@@ -186,7 +190,6 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
                     key: str(entry[key]) for key in ("feedGuid", "feedUrl", "title") if entry.get(key)
                 })
 
-    # Resolve duplicate input GUIDs deterministically to the newest publication.
     managed = {}
     for episode in sorted(episodes, key=lambda item: _utc(item["published_at"]), reverse=True):
         managed.setdefault(str(episode["guid"]), episode)
@@ -211,7 +214,8 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
         _put(item, "guid", guid, isPermaLink="false")
         if episode.get("link"):
             _put(item, "link", episode["link"])
-        _put(item, "enclosure", url=episode["mp3_url"], length=str(int(episode["length"])), type="audio/mpeg")
+        _put(item, "enclosure", url=episode["mp3_url"], length=str(int(episode["length"])),
+             type=enclosure_type(episode["mp3_url"]))
         _put(item, "pubDate", format_datetime(_utc(episode["published_at"]), usegmt=True))
         _put(item, "itunes:duration", _seconds(episode["duration"]))
         _put(item, "itunes:episodeType", episode.get("episode_type", "full"))
@@ -229,12 +233,8 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
             _put(item, "podcast:soundbite", soundbite.get("title", ""),
                  startTime=_seconds(soundbite["startTime"]), duration=_seconds(soundbite["duration"]))
         if episode.get("chapters"):
-            _put(item, "podcast:chapters", url=show["base_url"].rstrip("/") + "/chapters/" + chapter_filename(guid),
+            _put(item, "podcast:chapters", url=asset_base(show) + "/" + chapters_relative(episode),
                  type="application/json+chapters")
-            chapters = _put(item, "psc:chapters", version="1.2")
-            for chapter in episode["chapters"]:
-                _put(chapters, "psc:chapter", start=_chapter_time(chapter["startTime"]), title=chapter["title"],
-                     **{target: chapter[key] for key, target in (("img", "image"), ("url", "href")) if chapter.get(key)})
         if guid in originals:
             from .importer import extract_episode
             original_item = originals[guid]
@@ -261,7 +261,6 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
                     original_item.append(child)
             item = original_item
         new_items.append(item)
-    # Imported order and content remain untouched; managed items are prepended.
     first_item = next((i for i, child in enumerate(channel) if child.tag == "item"), len(channel))
     for index, item in enumerate(new_items):
         channel.insert(first_item + index, item)
