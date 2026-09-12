@@ -28,6 +28,23 @@ from .repair import scan_show, repair_show
 from .hosting import doctor
 
 
+def _describe_action_error(exc):
+    """Render an exception for the "Action failed" banner.
+
+    A bare PermissionError just names the path it couldn't write to (e.g. a
+    hidden staging directory next to the output folder), which reads as
+    baffling. Point at the directory that actually needs write access instead.
+    """
+    if isinstance(exc, PermissionError) and exc.filename:
+        path = Path(exc.filename)
+        directory = path if path.is_dir() else path.parent
+        return (f"Action failed: no write permission for {directory} "
+                f"(needed to create {path.name} there). Grant your account write "
+                f"access to that directory, e.g. `sudo chown \"$USER\" {directory}`, "
+                "then try again.")
+    return f"Action failed: {exc}"
+
+
 def _review_titles(changes):
     for guid, original, replacement in changes:
         console.print(f"{guid}\nOriginal: {original}\nReplacement: {replacement}", markup=False)
@@ -309,7 +326,7 @@ def _open_show(db, publisher, show):
         except Cancelled:
             console.print("Cancelled. Nothing was changed.")
         except Exception as exc:
-            error(f"Action failed: {exc}")
+            error(_describe_action_error(exc))
 
 
 def _pick_output_dir(destination):
@@ -446,7 +463,7 @@ def _interactive(db, publisher):
         except Cancelled:
             console.print("Cancelled. Nothing was changed.")
         except Exception as exc:
-            error(f"Action failed: {exc}")
+            error(_describe_action_error(exc))
 
 
 def _validate(db, show_id):
