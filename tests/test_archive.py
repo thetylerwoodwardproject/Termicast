@@ -118,6 +118,22 @@ def test_archive_feed_writes_manifest(tmp_path, monkeypatch):
     assert (dest / "feed.xml").is_file()
 
 
+@pytest.mark.parametrize("field,value", [
+    ("feed", "/etc/passwd"),
+    ("feed", "../../../etc/passwd"),
+    ("pages", ["../escape.xml"]),
+    ("assets", {"https://old.example.org/audio/ep1.mp3": "../../../tmp/evil.mp3"}),
+    ("assets", {"https://old.example.org/audio/ep1.mp3": "/tmp/evil.mp3"}),
+])
+def test_load_manifest_rejects_path_traversal(tmp_path, field, value):
+    manifest = make_archive(tmp_path)
+    data = json.loads(manifest.read_text())
+    data[field] = value
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="relative path|components"):
+        load_manifest(manifest)
+
+
 def test_restage_previews_mapping(tmp_path):
     from termicast.archive import restage
     manifest = make_archive(tmp_path)

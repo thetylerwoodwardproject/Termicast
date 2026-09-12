@@ -173,11 +173,33 @@ def restage(manifest_path, base_url):
     return mapping, errors
 
 
+def _safe_relative_path(value, what):
+    """Reject absolute paths and traversal components in manifest-supplied paths.
+
+    `feed`, `pages`, and `assets` values are later joined onto the archive
+    directory (to read) and a staging directory (to write); an unvalidated
+    absolute path or `..` segment would let a crafted manifest read or write
+    files anywhere on disk.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Archive manifest {what} must be a nonempty relative path")
+    if value.startswith("/") or "\\" in value or "\x00" in value:
+        raise ValueError(f"Archive manifest {what} must be a relative path: {value!r}")
+    if any(part in ("", ".", "..") for part in value.split("/")):
+        raise ValueError(f"Archive manifest {what} must not contain empty, '.', or '..' components: {value!r}")
+    return value
+
+
 def load_manifest(manifest_path):
     path = Path(manifest_path).expanduser()
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not data.get("feed"):
         raise ValueError("Archive manifest must be a JSON object with a 'feed' entry")
+    _safe_relative_path(data["feed"], "feed")
+    for page in data.get("pages") or []:
+        _safe_relative_path(page, "pages entry")
+    for url, relative in (data.get("assets") or {}).items():
+        _safe_relative_path(relative, f"assets entry for {url!r}")
     return path, data
 
 

@@ -198,14 +198,11 @@ def probe_audio(path):
 
 
 def _atomic_install(temp_path, final_path):
+    from .publisher import fsync_dir
     final_path = Path(final_path)
     final_path.parent.mkdir(parents=True, exist_ok=True)
     os.replace(temp_path, final_path)
-    directory = os.open(final_path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+    fsync_dir(final_path.parent)
 
 
 def _copy_stream(source, destination, update=None):
