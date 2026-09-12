@@ -21,6 +21,11 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
 
     Hold the same locks as publication until all files have been copied. Backups
     include saved state only, not in-memory forms or externally hosted assets.
+
+    `_locked` is no longer load-bearing: `filesystem_lock` is re-entrant within
+    a thread, so a caller that already holds the database lock can call this
+    without it. It is kept because it documents the caller's intent and avoids
+    a pointless depth bump.
     """
     destination = Path(destination or db.path.parent / "backups").expanduser().resolve()
     now = datetime.now(timezone.utc)

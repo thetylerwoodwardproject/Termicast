@@ -228,7 +228,8 @@ def archive_identity(manifest_path):
     return _extract_show(root, feed)
 
 
-def import_archive(show, manifest_path, review_artwork=None):
+def import_archive(show, manifest_path, review_artwork=None, naming=None,
+                   naming_fallback="position"):
     """Consume an archive manifest + staged files into `show`'s asset root.
 
     Returns `(show, episodes, template)` where `show` carries `import_url_map`
@@ -241,5 +242,6 @@ def import_archive(show, manifest_path, review_artwork=None):
     preseed = {url: (str(root_dir / relative), relative)
                for url, relative in (data.get("assets") or {}).items()}
     show, episodes = download_import(show, template, preseed=preseed, require_preseed=True,
-                                     review_artwork=review_artwork)
+                                     review_artwork=review_artwork, naming=naming,
+                                     naming_fallback=naming_fallback)
     return show, episodes, template

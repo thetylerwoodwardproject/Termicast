@@ -3,15 +3,14 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 from .backup import create_backup
 from .feed import _parse_xml, _tag, render_feed, validate_feed
 from .models import chapters_relative, transcript_relative
-from .publisher import Publisher, fsync_dir
+from .publisher import Publisher, fsync_dir, operation_lock
 from .database import filesystem_lock
 from .validation import validate_episode
-from .storage import asset_root, asset_base
+from .storage import asset_root, local_relative
 
 
 def scan_show(db, show_id):
@@ -44,15 +43,13 @@ def scan_show(db, show_id):
         issues.append(f"Cannot regenerate from saved data: {exc}")
         return {"show": show, "episodes": episodes, "template": template, "fixes": fixes,
                 "issues": issues, "missing": missing}
-    base = urlsplit(asset_base(show) + "/")
     for element in root.iter():
         if element.tag not in ("enclosure", _tag("podcast:chapters"), _tag("podcast:transcript"), _tag("itunes:image")):
             continue
         url = element.get("url") or element.get("href") or ""
-        parts = urlsplit(url)
-        if (parts.scheme, parts.netloc) != (base.scheme, base.netloc) or not parts.path.startswith(base.path):
+        relative = local_relative(show, url)
+        if relative is None:
             continue
-        relative = Path(unquote(parts.path[len(base.path):]))
         path = assets / relative
         if not path.resolve().is_relative_to(assets.resolve()):
             issues.append(f"Unsafe local resource path: {url}")
@@ -83,7 +80,18 @@ def repair_show(db, scan, selected, recoveries=None, output_dir=None):
         raise ValueError("Corrected output directory must be new; existing files are not moved")
     if selected - {f["guid"] for f in scan["fixes"]}:
         raise ValueError("Unknown repair selection")
-    with db.lock():
+    # Locks are taken operation -> database -> output everywhere, so that a
+    # concurrent publish-due (which takes the operation lock first) can never
+    # hold one while we wait for the other. `_write` below re-reads the show and
+    # locks whichever output directory it then sees, so when the directory is
+    # being corrected the old and the new one are both claimed here, always in
+    # that order. The lock file needs its directory to exist; `_write` creates
+    # it the same way.
+    current = Path(show["output_dir"]).expanduser().absolute()
+    for directory in (current, output):
+        directory.mkdir(parents=True, exist_ok=True)
+    with operation_lock({"output_dir": str(current)}), \
+            operation_lock({"output_dir": str(output)}), db.lock():
         if db.get_show(show["id"]) != show or db.list_episodes(show["id"]) != scan["episodes"]:
             raise ValueError("Podcast changed since scan; scan again before repairing")
         with db.connection() as conn:
@@ -105,7 +113,6 @@ def repair_show(db, scan, selected, recoveries=None, output_dir=None):
             if output_dir:
                 updated = dict(show, output_dir=str(output))
                 conn.execute("UPDATE shows SET settings=? WHERE id=?", (json.dumps(updated), show["id"]))
-        output.mkdir(parents=True, exist_ok=True)
         with filesystem_lock(output / ".termicast.lock"):
             for destination, source in recoveries.items():
                 relative = Path(destination).relative_to(asset_root(show))

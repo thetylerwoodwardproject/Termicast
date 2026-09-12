@@ -13,6 +13,8 @@ Termicast combines episode publishing, podcast migration, and media preparation
 into one CLI. Add episodes from local media files, schedule them, and deploy
 either to a local web server or to S3-compatible object storage.
 
+![Termicast broadcast console: the main menu with options to open, import, create, or forget a podcast](docs/screenshot.png)
+
 ## Quickstart
 
 ```sh

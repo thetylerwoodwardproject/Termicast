@@ -20,8 +20,8 @@ from .migration import migration_guidance
 from .models import new_show
 from .prompts import (
     ACCENT, confirm, console, edit_field, error, menu, show_banner, show_form, show_summary, text,
-    warning, menu_utilities, show_faq, ExitRequested, edit_episode_form, optional_assets,
-    add_episode, episode_form, hosting_menu,
+    warning, menu_utilities, show_faq, Cancelled, ExitRequested, edit_episode_form,
+    optional_assets, add_episode, episode_form, hosting_menu,
 )
 from .publisher import Publisher
 from .repair import scan_show, repair_show
@@ -56,6 +56,60 @@ def _artwork_reviewer():
         return action != 3
 
     return review
+
+
+def _choose_naming(episodes, show):
+    """Return (scheme, fallback); (None, ...) keeps the imported file names."""
+    from .models import plan_slugs
+    console.print("Imported files are named after a hash of their original URL, such as "
+                  "audio/a3f9c2…e81.mp3. They can instead be named in sequence.", markup=False)
+    action = menu("Episode file naming", ["Keep the imported file names",
+                                          "ep001, ep002, … (episode number)",
+                                          "s01ep001, s01ep002, … (season and episode number)"], 2)
+    if action == 1:
+        return None, "position"
+    scheme = "ep" if action == 2 else "sep"
+    fallback = "position"
+    unnumbered = [e for e in episodes if e.get("episode_number") is None]
+    if unnumbered:
+        console.print(f"{len(unnumbered)} of {len(episodes)} episodes declare no episode "
+                      "number in the feed.", markup=False)
+        fallback = ("position", "keep")[menu("Episodes without an episode number",
+                    ["Number them by publication order, oldest first",
+                     "Keep their imported file names"], 1) - 1]
+    try:
+        planned = plan_slugs(episodes, scheme, fallback)
+    except ValueError as exc:
+        error(exc)
+        warning("Feed episode numbers cannot name these files uniquely.")
+        if not confirm("Number every episode by publication order instead?", True):
+            return None, fallback
+        try:
+            planned = plan_slugs(episodes, scheme, "renumber")
+        except ValueError as retry:
+            error(retry)
+            return None, fallback
+        fallback = "renumber"
+    if not planned:
+        warning("No episode can be named under this scheme; keeping the imported names.")
+        return None, fallback
+    _preview_names(planned, len(episodes))
+    if show.get("hosting") == "s3" and not show.get("keep_local_media"):
+        warning("This podcast uploads media to S3 and does not keep a local copy. "
+                "Once deployed, these files can no longer be renamed from Termicast. "
+                "Consider enabling 'Keep a local copy of media' under Hosting.")
+    if not confirm("Use these names?", True):
+        return None, fallback
+    return scheme, fallback
+
+
+def _preview_names(planned, total):
+    """Show the first few planned names and the last, rather than all of them."""
+    names = list(planned.values())
+    shown = names[:5] + (["…"] if len(names) > 6 else []) + (names[-1:] if len(names) > 5 else [])
+    console.print(f"Planned names ({len(names)} of {total} episodes):", style=ACCENT)
+    for name in shown:
+        console.print(f"  {name}", markup=False)
 
 
 def _resolve_optional(episode, kind, url, exc):
@@ -185,7 +239,7 @@ def _episodes(db, publisher, show):
             selection = ("all", "published", "scheduled")[menu(
                 "Filter episodes", ["All", "Published", "Scheduled"]) - 1]
         else:
-            edit_episode_form(show, publisher, episodes[action - 1])
+            edit_episode_form(db, show, publisher, episodes[action - 1])
 
 
 def _tools(db, publisher, show):
@@ -194,23 +248,32 @@ def _tools(db, publisher, show):
                                 "Export episode CSV", "Migration guidance", "Back"])
         if action == 6:
             return
+        try:
+            _tool_action(db, publisher, show, action)
+        except Cancelled:
+            console.print("Cancelled. Nothing was changed.")
         if action == 1:
-            _check_repair(db, show)
             show = db.get_show(show["id"])
-        elif action == 2:
-            publisher.regenerate(show["id"])
-            console.print("Feed regenerated.", style=ACCENT)
-        elif action == 3:
-            path = text("CSV path (merge; no episodes deleted)", required=True)
-            if confirm("Preflight and merge this CSV?", False):
-                count = import_csv(db, show["id"], path, review_titles=_review_titles)
-                console.print(f"Merged {count} episodes.", style=ACCENT)
-        elif action == 4:
-            selection = ("all", "published", "scheduled")[menu("Export episodes", ["All", "Published", "Scheduled"]) - 1]
-            path = text("Private CSV destination", required=True)
-            console.print(str(export_csv(db, show["id"], path, selection)), markup=False)
-        elif action == 5:
-            console.print(migration_guidance(show), markup=False)
+
+
+def _tool_action(db, publisher, show, action):
+    """Run one Tools menu action; the caller reports a cancelled prompt."""
+    if action == 1:
+        _check_repair(db, show)
+    elif action == 2:
+        publisher.regenerate(show["id"])
+        console.print("Feed regenerated.", style=ACCENT)
+    elif action == 3:
+        path = text("CSV path (merge; no episodes deleted)", required=True)
+        if confirm("Preflight and merge this CSV?", False):
+            count = import_csv(db, show["id"], path, review_titles=_review_titles)
+            console.print(f"Merged {count} episodes.", style=ACCENT)
+    elif action == 4:
+        selection = ("all", "published", "scheduled")[menu("Export episodes", ["All", "Published", "Scheduled"]) - 1]
+        path = text("Private CSV destination", required=True)
+        console.print(str(export_csv(db, show["id"], path, selection)), markup=False)
+    elif action == 5:
+        console.print(migration_guidance(show), markup=False)
 
 
 def _open_show(db, publisher, show):
@@ -241,6 +304,8 @@ def _open_show(db, publisher, show):
                 _tools(db, publisher, show)
         except EOFError:
             raise
+        except Cancelled:
+            console.print("Cancelled. Nothing was changed.")
         except Exception as exc:
             error(f"Action failed: {exc}")
 
@@ -270,7 +335,12 @@ def _create_or_import(db, publisher, importing=False):
             show = show_form(show)
             if show is None:
                 return
-            show, episodes, template = import_archive(show, manifest, review_artwork=_artwork_reviewer())
+            from .archive import load_manifest, merged_template
+            from .importer import extract_episodes
+            scheme, fallback = _choose_naming(
+                extract_episodes(merged_template(*load_manifest(manifest))), show)
+            show, episodes, template = import_archive(show, manifest, review_artwork=_artwork_reviewer(),
+                                                      naming=scheme, naming_fallback=fallback)
         else:
             source = text("Existing feed (HTTPS URL or local XML path)", required=True)
             settings, template = import_feed(source)
@@ -285,10 +355,13 @@ def _create_or_import(db, publisher, importing=False):
             show = show_form(show)
             if show is None:
                 return
+            from .importer import extract_episodes
+            scheme, fallback = _choose_naming(extract_episodes(template), show)
             show, episodes = download_import(show, template, review_titles=_review_titles,
                                              review_optional=lambda episodes, root: _review_optional(episodes, root, show),
                                              resolve_optional=_resolve_optional,
-                                             review_artwork=_artwork_reviewer())
+                                             review_artwork=_artwork_reviewer(),
+                                             naming=scheme, naming_fallback=fallback)
     else:
         show = show_form(new_show(), collect=True)
         if show is None:
@@ -322,6 +395,8 @@ def _interactive(db, publisher):
                     console.print("Podcast forgotten. Output files were not deleted.", style=ACCENT)
         except EOFError:
             raise
+        except Cancelled:
+            console.print("Cancelled. Nothing was changed.")
         except Exception as exc:
             error(f"Action failed: {exc}")
 
@@ -456,6 +531,9 @@ def main(argv=None):
             return _interactive(db, publisher)
     except ExitRequested:
         console.print("Exiting. Unsaved form edits were discarded.")
+        return 0
+    except Cancelled:
+        console.print("Cancelled.")
         return 0
     except EOFError:
         console.print("\nInput closed. Exiting.")

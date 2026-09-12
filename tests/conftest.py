@@ -10,6 +10,21 @@ from termicast.models import new_show
 
 
 @pytest.fixture(autouse=True)
+def plain_console(monkeypatch):
+    """Assert on prompt text, not on ANSI codes a developer's FORCE_COLOR adds.
+
+    Rich resolves the color system when the Console is built at import time, so
+    the settings have to be turned off on the live object rather than the
+    environment.
+    """
+    from termicast import prompts
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setattr(prompts.console, "_color_system", None, raising=False)
+    monkeypatch.setattr(prompts.console, "_force_terminal", False, raising=False)
+    monkeypatch.setattr(prompts.console, "no_color", True, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def data_dir(tmp_path, monkeypatch):
     home = tmp_path / "state"
     monkeypatch.setenv("TERMICAST_HOME", str(home))

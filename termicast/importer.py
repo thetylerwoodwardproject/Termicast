@@ -13,7 +13,7 @@ import shutil
 import tempfile
 
 from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
-from .models import new_episode
+from .models import new_episode, plan_slugs
 from .publisher import atomic_write, fsync_dir
 from .validation import _HTTPSRedirectHandler
 from . import validation
@@ -215,8 +215,37 @@ def _convert_import_artwork(path, url, review_artwork, kind=""):
     atomic_write(path, content.getvalue())
 
 
+ASSET_ROLES = (("mp3_url", "audio_path"), ("artwork_url", "image_path"),
+               ("transcript_url", "transcript_path"))
+
+
+def _shared_asset_urls(episodes):
+    """Source URLs more than one episode points at; these keep their hash name.
+
+    Feeds routinely reuse one artwork URL for every item, and `asset` stages
+    such a URL exactly once. Renaming that single file per episode would leave
+    every episode but the last pointing at a name it does not own.
+    """
+    counts = {}
+    for episode in episodes:
+        for field, _ in ASSET_ROLES:
+            url = episode.get(field)
+            if url:
+                counts[url] = counts.get(url, 0) + 1
+    return {url for url, count in counts.items() if count > 1}
+
+
+def _check_name_destinations(assets, slugs):
+    """Refuse before downloading anything if a chosen name is already taken."""
+    for slug in slugs:
+        for folder in ("audio", "images", "images/episodes", "transcripts", "chapters"):
+            for existing in (assets / folder).glob(slug + ".*"):
+                raise ValueError(f"Episode name {slug} is already taken by {existing}")
+
+
 def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None,
-                    preseed=None, require_preseed=False, review_artwork=None):
+                    preseed=None, require_preseed=False, review_artwork=None, naming=None,
+                    naming_fallback="position"):
     """Stage every supported asset before installing a new public directory.
 
     The original XML stays untouched. Exact URL substitutions are persisted in
@@ -226,6 +255,10 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     `review_artwork(url, format, mode, size, target_size=...)` approves conversion
     of a staged JPEG/PNG. The optional target_size keyword requests resizing;
     a false result cancels the import. Omit the callback for strict validation.
+    `naming` ("ep" or "sep") renames each episode's staged assets to a
+    sequential slug instead of the hash of its source URL; None keeps the hash
+    names. `naming_fallback` ("position" or "keep") decides what happens to
+    episodes whose feed declares no episode number.
     """
     errors = validation.validate_show(show)
     if errors:
@@ -255,6 +288,9 @@ def download_import(show, template, review_titles=None, review_optional=None, re
         for episode in episodes:
             if len(episode["title"]) > 60:
                 episode["title"] = episode["title"][:60].rstrip()
+    slugs = plan_slugs(episodes, naming, naming_fallback) if naming else {}
+    shared = _shared_asset_urls(episodes)
+    _check_name_destinations(assets, slugs.values())
     with tempfile.TemporaryDirectory(prefix=".termicast-import-", dir=output.parent) as temporary:
         stage = Path(temporary) / "public"
         for folder in ("audio", "chapters", "images/episodes", "images/show", "images/chapters", "transcripts"):
@@ -341,6 +377,49 @@ def download_import(show, template, review_titles=None, review_optional=None, re
                     if url is None:
                         return [] if folder == "chapters" else ""
 
+        def rename_staged(url, slug):
+            """Rename the staged file for `url` to `slug`, keeping its folder.
+
+            Renaming in place preserves both the folder (imported episode art
+            lives under images/episodes) and the suffix, which follows the
+            source rather than the episode.
+            """
+            if not slug or not url or url not in local_paths or url in shared:
+                return None
+            path = local_paths[url]
+            target = path.with_name(slug + path.suffix)
+            if target == path:
+                return path.relative_to(stage).as_posix()
+            if target.exists():
+                raise ValueError(f"Two imported assets would both be named {target.name}")
+            os.replace(path, target)
+            local_paths[url] = target
+            relative = target.relative_to(stage).as_posix()
+            mapping[url] = asset_base(show) + "/" + relative
+            return relative
+
+        def source_for(public_url):
+            """Original URL behind a rehosted one; `optional` may have swapped it."""
+            if not public_url:
+                return None
+            for source, rehosted in mapping.items():
+                if rehosted == public_url:
+                    return source
+            return None
+
+        def apply_naming(episode):
+            """Give one episode its slug and point its record at the new files."""
+            slug = slugs.get(episode["guid"])
+            if not slug:
+                return
+            episode["slug"] = slug
+            for field, path_field in ASSET_ROLES:
+                source = source_for(episode.get(field))
+                relative = rename_staged(source, slug)
+                if relative:
+                    episode[field] = mapping[source]
+                    episode[path_field] = relative
+
         channel = root.find("channel")
         for element in channel.findall(_tag("itunes:image")):
             asset(element.get("href"), "images/show", "show")
@@ -370,6 +449,7 @@ def download_import(show, template, review_titles=None, review_optional=None, re
             for chapter in episode["chapters"]:
                 if chapter.get("img") and chapter["img"] not in mapping.values():
                     chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
+            apply_naming(episode)
             errors = validation.validate_episode(episode)
             if errors:
                 raise ValueError(f"Imported episode {episode['guid']}: " + "; ".join(errors))
