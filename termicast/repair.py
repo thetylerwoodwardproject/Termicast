@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlsplit
 from .backup import create_backup
 from .feed import _parse_xml, _tag, render_feed, validate_feed
 from .models import chapters_relative, transcript_relative
-from .publisher import Publisher
+from .publisher import Publisher, fsync_dir
 from .database import filesystem_lock
 from .validation import validate_episode
 from .storage import asset_root, asset_base
@@ -124,11 +124,7 @@ def repair_show(db, scan, selected, recoveries=None, output_dir=None):
                         os.fchmod(handle.fileno(), 0o644)
                         os.fsync(handle.fileno())
                     os.replace(temporary, target)
-                    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
-                    try:
-                        os.fsync(directory)
-                    finally:
-                        os.close(directory)
+                    fsync_dir(target.parent)
                 finally:
                     Path(temporary).unlink(missing_ok=True)
         Publisher(db)._write(show["id"], datetime.now(timezone.utc), include_due=False)

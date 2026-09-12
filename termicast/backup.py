@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from .database import filesystem_lock
 from .models import chapters_relative, transcript_relative
+from .publisher import fsync_dir
 from .storage import asset_root
 
 
@@ -104,9 +105,5 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                 os.fsync(handle.fileno())
             result = destination / name
             os.link(archive_path, result)
-            directory = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            fsync_dir(destination)
     return result

@@ -18,6 +18,15 @@ from .models import chapters_relative, transcript_relative
 from .storage import asset_root, asset_base
 
 
+def fsync_dir(path):
+    """Fsync a directory so a preceding create/replace/link is durable."""
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def atomic_write(path, data, mode=0o644):
     """Replace a complete file on the same filesystem and fsync its directory."""
     path = Path(path)
@@ -30,11 +39,7 @@ def atomic_write(path, data, mode=0o644):
             os.fchmod(handle.fileno(), mode)
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_dir(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

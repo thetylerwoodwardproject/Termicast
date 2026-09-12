@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request, build_opener
 from uuid import NAMESPACE_URL, uuid5
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -14,6 +14,8 @@ import tempfile
 
 from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
 from .models import new_episode
+from .publisher import atomic_write, fsync_dir
+from .validation import _HTTPSRedirectHandler
 from . import validation
 
 
@@ -21,12 +23,6 @@ def _https(url):
     if not validation.validate_https(url):
         raise ValueError("Feed URL must be HTTPS without credentials")
     return url
-
-
-class _HTTPSRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _https(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _uses_op3(root):
@@ -190,7 +186,6 @@ def extract_episodes(template, mapping=None):
 def _convert_import_artwork(path, url, review_artwork, kind=""):
     """Normalize only the staged copy, after explicit conversion approval."""
     from PIL import Image, ImageOps
-    from .publisher import atomic_write
     from io import BytesIO
 
     with Image.open(path) as image:
@@ -328,7 +323,6 @@ def download_import(show, template, review_titles=None, review_optional=None, re
                         for chapter in chapters:
                             if chapter.get("img") and chapter["img"] not in mapping.values():
                                 chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
-                        from .publisher import atomic_write
                         atomic_write(local_paths[url], (json.dumps(payload, allow_nan=False, indent=2) + "\n").encode())
                         return chapters
                     if Path(urlsplit(url).path).suffix.lower() == ".vtt":
@@ -414,19 +408,11 @@ def download_import(show, template, review_titles=None, review_optional=None, re
                         os.fchmod(destination.fileno(), 0o644)
                         os.fsync(destination.fileno())
                     os.link(temporary_file, target)
-                    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
-                    try:
-                        os.fsync(directory)
-                    finally:
-                        os.close(directory)
+                    fsync_dir(target.parent)
                 finally:
                     Path(temporary_file).unlink(missing_ok=True)
             for folder in ("audio", "images", "transcripts", "chapters"):
                 (assets / folder).mkdir(parents=True, exist_ok=True)
             output.mkdir(parents=True, exist_ok=True)
-        directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        fsync_dir(output.parent)
     return show, episodes

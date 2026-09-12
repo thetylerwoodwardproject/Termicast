@@ -13,9 +13,6 @@ from urllib.parse import urlsplit
 from .validation import validate_https
 
 
-FOLDERS = ("audio", "images", "transcripts", "chapters")
-
-
 def asset_root(show):
     return Path(show["output_dir"]).expanduser().absolute()
 
@@ -29,10 +26,6 @@ def asset_base(show):
     if show.get("hosting") == "s3":
         return (show.get("asset_base_url") or show.get("base_url", "")).rstrip("/")
     return show["base_url"].rstrip("/")
-
-
-def hosting_kind(show):
-    return "s3" if show.get("hosting") == "s3" else "local"
 
 
 def validate_storage(show):
@@ -81,4 +74,3 @@ def validate_conflicting_prefixes(shows):
                     f"S3 target prefix {show.get('prefix') or '(root)'} conflicts with an existing show "
                     f"using the same bucket {show['bucket']}")
         seen.setdefault(key, []).append((endpoint, bucket, prefix))
-    return None
