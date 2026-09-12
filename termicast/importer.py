@@ -260,7 +260,7 @@ def _clear_previous_import(output):
         feed_path.unlink()
 
 
-def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None,
+def download_import(show, template, review_optional=None, resolve_optional=None,
                     preseed=None, require_preseed=False, review_artwork=None, naming=None,
                     naming_fallback="position", overwrite=False):
     """Stage every supported asset before installing a new public directory.
@@ -303,14 +303,6 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     root = _parse_xml(template)
     mapping, local_paths, metadata = {}, {}, {}
     episodes = extract_episodes(template)
-    changes = [(e["guid"], e["title"], e["title"][:60].rstrip())
-               for e in episodes if len(e["title"]) > 60]
-    if changes:
-        if review_titles is None or not review_titles(changes):
-            raise ValueError("Overlong titles require original/replacement review and confirmation")
-        for episode in episodes:
-            if len(episode["title"]) > 60:
-                episode["title"] = episode["title"][:60].rstrip()
     slugs = plan_slugs(episodes, naming, naming_fallback) if naming else {}
     shared = _shared_asset_urls(episodes)
     _check_name_destinations(assets, slugs.values())
