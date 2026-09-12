@@ -1,4 +1,4 @@
-# Termicast — User Guide
+# 📻 Termicast — User Guide
 
 Termicast is a simple program for running a podcast from your own server. It
 turns your audio files into a ready-to-publish podcast feed, handles your
@@ -9,7 +9,7 @@ This guide explains how to use it, step by step, in plain language.
 
 ---
 
-## 1. The basics, in one minute
+## 🧩 1. The basics, in one minute
 
 Termicast works like a series of numbered menus. You pick a number, press
 Enter, and follow the prompts.
@@ -30,7 +30,7 @@ address. You can manage several shows at once.
 
 ---
 
-## 2. Installing
+## 🛠️ 2. Installing
 
 You need a Linux server with Python 3.11+ and FFmpeg.
 
@@ -59,7 +59,7 @@ instead add `alias termicast='/opt/termicast/.venv/bin/termicast'` to
 
 ---
 
-## 3. The main menu
+## 🧭 3. The main menu
 
 When you run `termicast`, you see:
 
@@ -81,7 +81,7 @@ When you run `termicast`, you see:
 
 ---
 
-## 4. Creating your first podcast
+## 🎬 4. Creating your first podcast
 
 Choose **3. Create podcast**. Termicast asks for the essentials:
 
@@ -102,7 +102,7 @@ That's it — your show is created and its feed file (`feed.xml`) is written.
 
 ---
 
-## 5. Adding an episode (the main thing you'll do)
+## 🎙️ 5. Adding an episode (the main thing you'll do)
 
 Open your show, then choose **1. New episode**.
 
@@ -144,13 +144,14 @@ You'll see a summary of the results, then you enter the **title** and
 
 That's the whole episode flow.
 
-> **Tip:** your audio and image files must be on the *same machine* as
-> Termicast. If Termicast runs on a VPS, it can't see files on your laptop —
-> upload them to the server first.
+> [!TIP]
+> Your audio and image files must be on the *same machine* as Termicast. If
+> Termicast runs on a VPS, it can't see files on your laptop — upload them to
+> the server first.
 
 ---
 
-## 6. Scheduling an episode
+## ⏰ 6. Scheduling an episode
 
 Choose **3. Schedule** at the review screen and enter a future date/time in
 your show's timezone, for example:
@@ -173,7 +174,7 @@ cron job that runs every few minutes:
 
 ---
 
-## 7. Importing an existing podcast
+## 📦 7. Importing an existing podcast
 
 If you already publish a podcast somewhere else, choose
 **2. Import existing podcast**. Termicast:
@@ -198,13 +199,14 @@ Proportions are preserved, with white padding for non-square images; smaller
 images are enlarged. JPEG/PNG format is preserved. This
 also works for archive imports and converts only the staged copy.
 
-After importing, check that the new feed is publicly reachable, then ask your
-old host to set up a **301 redirect** from the old feed URL to the new one.
-Termicast can't do that redirect for you — your old host must.
+> [!IMPORTANT]
+> After importing, check that the new feed is publicly reachable, then ask
+> your old host to set up a **301 redirect** from the old feed URL to the new
+> one. Termicast can't do that redirect for you — your old host must.
 
 ---
 
-## 8. Hosting (where your files live)
+## ☁️ 8. Hosting (where your files live)
 
 One thing stays the same no matter what: **your feed file (`feed.xml`) always
 stays on your own web server.** It's written to the show's output folder and
@@ -233,8 +235,9 @@ files. You'll set two addresses:
 - **Asset base URL** — the public address of your bucket (e.g.
   `https://my-bucket.us-east-1.linodeobjects.com/my-show`).
 
-Put your S3 credentials in a file called `~/.s3cfg` on the server (never in
-Termicast). Termicast only stores the bucket name and addresses.
+> [!IMPORTANT]
+> Put your S3 credentials in a file called `~/.s3cfg` on the server (never in
+> Termicast). Termicast only stores the bucket name and addresses.
 
 When setting up S3, you'll also be asked: **"Keep a local copy of media after
 it's uploaded to S3?"**
@@ -246,7 +249,7 @@ it's uploaded to S3?"**
 
 ---
 
-## 9. Backing up your data
+## 💾 9. Backing up your data
 
 Press **B** at any menu to make a backup. It saves your settings, episodes, and
 schedules into a private ZIP file.
@@ -257,11 +260,12 @@ To include your audio and artwork too, use the command line:
 termicast backup --include-media
 ```
 
-Keep backups somewhere private, outside your public web folders.
+> [!WARNING]
+> Keep backups somewhere private, outside your public web folders.
 
 ---
 
-## 10. Getting help
+## ❓ 10. Getting help
 
 Press **F** at any menu for the FAQ, or run:
 
@@ -271,7 +275,7 @@ termicast faq
 
 ---
 
-## 11. Command cheat sheet
+## 📋 11. Command cheat sheet
 
 You can also skip the menus for common tasks:
 
@@ -286,6 +290,7 @@ termicast publish-due                       # release due episodes
 termicast backup                            # make a backup
 ```
 
+> [!NOTE]
 > **What's `<show-id>`?** It's the internal ID shown next to your show's name
 > in the "Open podcast" list. It looks like a long number-letter code.
 
@@ -293,3 +298,15 @@ termicast backup                            # make a backup
 
 That's everything you need to get started. Create your show, add an episode,
 and hit **Publish now**.
+
+---
+
+Developed with the help of machines by **Tyler Woodward** of **The Tyler
+Woodward Project**.
+
+[![Website](https://img.shields.io/badge/Website-tylerwoodward.me-14b8a6?style=for-the-badge)](https://tylerwoodward.me)
+[![Threads](https://img.shields.io/badge/Threads-%40tylerwoodward.me-000000?style=for-the-badge&logo=threads&logoColor=white)](https://www.threads.net/@tylerwoodward.me)
+[![Instagram](https://img.shields.io/badge/Instagram-%40tylerwoodward.me-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/tylerwoodward.me)
+[![Bluesky](https://img.shields.io/badge/Bluesky-tylerwoodward.me-0285FF?style=for-the-badge&logo=bluesky&logoColor=white)](https://bsky.app/profile/tylerwoodward.me)
+[![YouTube](https://img.shields.io/badge/YouTube-%40thetylerwoodwardproject-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@thetylerwoodwardproject)
+[![Facebook](https://img.shields.io/badge/Facebook-%2Fthetylerwoodwardproject-1877F2?style=for-the-badge&logo=facebook&logoColor=white)](https://www.facebook.com/thetylerwoodwardproject)
