@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from termicast import cli
@@ -11,6 +13,18 @@ def test_help_lists_new_commands(data_dir, capsys):
     for command in ("add", "deploy", "doctor", "publish-due", "validate", "archive", "restage"):
         assert command in output
     assert not data_dir.exists()
+
+
+def test_disable_unsupported_cpr_probe_sets_default(monkeypatch):
+    monkeypatch.delenv("PROMPT_TOOLKIT_NO_CPR", raising=False)
+    cli._disable_unsupported_cpr_probe()
+    assert os.environ["PROMPT_TOOLKIT_NO_CPR"] == "1"
+
+
+def test_disable_unsupported_cpr_probe_respects_explicit_opt_out(monkeypatch):
+    monkeypatch.setenv("PROMPT_TOOLKIT_NO_CPR", "0")
+    cli._disable_unsupported_cpr_probe()
+    assert os.environ["PROMPT_TOOLKIT_NO_CPR"] == "0"
 
 
 def test_validate_empty(capsys):

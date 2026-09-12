@@ -482,7 +482,20 @@ def _validate(db, show_id):
     return 1 if failures else 0
 
 
+def _disable_unsupported_cpr_probe():
+    """Skip prompt_toolkit's cursor-position-request probe.
+
+    Some terminals never reply to the `\x1b[6n` query, so prompt_toolkit
+    waits out a 2-second timeout on every menu/confirm prompt and prints
+    "your terminal doesn't support cursor position requests (CPR)". None of
+    Termicast's list-style menus depend on cursor-row placement, so the
+    probe is safe to skip outright.
+    """
+    os.environ.setdefault("PROMPT_TOOLKIT_NO_CPR", "1")
+
+
 def main(argv=None):
+    _disable_unsupported_cpr_probe()
     parser = argparse.ArgumentParser(prog="termicast", description="Manage and publish podcast feeds.")
     parser.add_argument("--data-dir", help="Store the database here (sets TERMICAST_HOME).")
     commands = parser.add_subparsers(dest="command")

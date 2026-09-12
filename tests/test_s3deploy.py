@@ -80,6 +80,22 @@ def test_upload_file_access_denied_gives_generic_help_for_s3_compatible(tmp_path
         upload_file(show, local, "audio/x.mp3")
 
 
+def test_upload_file_access_denied_describes_bucket_root_without_prefix(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["prefix"] = ""
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "AccessDenied on PutObject"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError) as excinfo:
+        upload_file(show, local, "audio/x.mp3")
+    message = str(excinfo.value)
+    assert "bucket root, no prefix" in message
+    assert "prefix ''" not in message
+    assert "prefix '/'" not in message
+
+
 def test_upload_file_non_permission_error_has_no_extra_help(tmp_path, monkeypatch):
     show = s3_show(tmp_path)
     (tmp_path / "out" / "audio").mkdir(parents=True)

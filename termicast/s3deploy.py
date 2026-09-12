@@ -83,12 +83,13 @@ def _permission_help(show, message):
     if "denied" not in message.lower() and "forbidden" not in message.lower():
         return ""
     if show.get("endpoint_url"):
+        prefix = show.get("prefix", "")
+        scope = f"'{show['bucket']}' (prefix '{prefix}/')" if prefix else f"'{show['bucket']}' (bucket root, no prefix)"
         return (
             "\nThis looks like a permissions problem with your storage provider's access key, "
             "not a Termicast bug. In your provider's dashboard, make sure the key in ~/.s3cfg "
-            f"has read, write, AND delete access to bucket '{show['bucket']}' "
-            f"(prefix '{show.get('prefix', '')}/'), not just list/read -- a key scoped to "
-            "read-only or list-only permissions is the most common cause.")
+            f"has read, write, AND delete access to bucket {scope}, not just list/read -- a key "
+            "scoped to read-only or list-only permissions is the most common cause.")
     from .hosting import s3_write_policy_snippet
     return (
         "\nThis looks like a permissions problem with your AWS credentials, not a Termicast "
