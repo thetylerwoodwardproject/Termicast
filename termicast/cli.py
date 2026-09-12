@@ -23,7 +23,7 @@ from .prompts import (
     warning, menu_utilities, show_faq, Cancelled, ExitRequested, edit_episode_form,
     optional_assets, add_episode, episode_form, hosting_menu,
 )
-from .publisher import Publisher
+from .publisher import Publisher, atomic_write
 from .repair import scan_show, repair_show
 from .hosting import doctor
 
@@ -361,16 +361,62 @@ def _configure_hosting(destination):
         return
 
 
+def _resume_path(db):
+    return db.path.parent / "import-resume.json"
+
+
+def _load_resume(db):
+    """Return a saved (destination, overwrite) pair from an interrupted import setup, or None.
+
+    Only the output directory, base URL, and hosting/S3 destination fields are
+    saved -- never credentials, and nothing from the import source or episode
+    review that follows. That covers the setup steps that are actually
+    expensive to retype (up to eight prompts) when, say, an S3 permission
+    check fails and the whole import aborts.
+    """
+    try:
+        data = json.loads(_resume_path(db).read_text())
+        return data["destination"], data["overwrite"]
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def _save_resume(db, destination, overwrite):
+    atomic_write(_resume_path(db), json.dumps({"destination": destination, "overwrite": overwrite}, indent=2).encode())
+
+
+def _clear_resume(db):
+    _resume_path(db).unlink(missing_ok=True)
+
+
 def _create_or_import(db, publisher, importing=False):
     source = ""
     template = None
     episodes = None
     if importing:
         destination = new_show()
-        console.print("Choose the feed directory and its public HTTPS directory URL. Existing website directories are allowed. Hosting is configured next.", markup=False)
-        overwrite = _pick_output_dir(destination)
-        edit_field(destination, "base_url")
-        _configure_hosting(destination)
+        overwrite = False
+        resumed = _load_resume(db)
+        if resumed is not None:
+            saved_destination, saved_overwrite = resumed
+            hosting_label = "S3-compatible storage" if saved_destination.get("hosting") == "s3" else "Local web server"
+            console.print(f"Found an incomplete import setup: output dir "
+                          f"{saved_destination.get('output_dir') or '(not set)'}, hosting: {hosting_label}.",
+                          markup=False)
+            if confirm("Resume this setup instead of starting over?", True):
+                destination, overwrite = saved_destination, saved_overwrite
+            else:
+                _clear_resume(db)
+        if destination.get("output_dir"):
+            console.print("Using the saved output dir and hosting settings. Import source is next.", markup=False)
+        else:
+            console.print("Choose the feed directory and its public HTTPS directory URL. Existing website directories are allowed. Hosting is configured next.", markup=False)
+            overwrite = _pick_output_dir(destination)
+            _save_resume(db, destination, overwrite)
+            edit_field(destination, "base_url")
+            _save_resume(db, destination, overwrite)
+            _configure_hosting(destination)
+            _save_resume(db, destination, overwrite)
         kind = menu("Import source", ["Feed (HTTPS URL or local XML)", "Archive manifest (local files)"], 1)
         if kind == 2:
             manifest = text("Archive manifest path (manifest.json)", required=True)
@@ -422,6 +468,7 @@ def _create_or_import(db, publisher, importing=False):
     publisher.regenerate(show["id"])
     console.print("Podcast saved and feed generated.", style=ACCENT)
     if importing:
+        _clear_resume(db)
         console.print(migration_guidance(show, source), markup=False)
 
 

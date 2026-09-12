@@ -6,6 +6,9 @@ settings. Uploads are serialized (one subprocess at a time) and use s4cmd's
 are never treated as ordinary MD5 hashes.
 """
 
+import configparser
+import io
+import os
 import shutil
 import subprocess
 import sys
@@ -15,10 +18,59 @@ from pathlib import Path
 from .media import content_type_for
 from .storage import asset_root
 
+# The exact env vars s4cmd itself checks (S3Handler.s3_keys_from_env), ahead
+# of ~/.s3cfg -- checked here too so Termicast never nags about a missing
+# file when credentials are already supplied this way.
+S3_ACCESS_KEY_ENV = "S3_ACCESS_KEY"
+S3_SECRET_KEY_ENV = "S3_SECRET_KEY"
+
 # Upload controls from the rev1 plan.
 SINGLEPART_LIMIT = 64 * 1024 * 1024
 MULTIPART_SPLIT = 16 * 1024 * 1024
 NUM_THREADS = 2
+
+
+def s3cfg_path():
+    return Path.home() / ".s3cfg"
+
+
+def s3_credentials_present(path=None):
+    """True if s4cmd can find S3 credentials, via env vars or ~/.s3cfg.
+
+    Mirrors s4cmd's own lookup order closely enough to avoid nagging: it
+    checks S3_ACCESS_KEY/S3_SECRET_KEY, then `[default] access_key` /
+    `secret_key` in the s3cfg file (s4cmd also accepts command-line flags,
+    which Termicast never passes, so those aren't checked here).
+    """
+    if os.environ.get(S3_ACCESS_KEY_ENV) and os.environ.get(S3_SECRET_KEY_ENV):
+        return True
+    cfg_path = Path(path) if path else s3cfg_path()
+    if not cfg_path.is_file():
+        return False
+    config = configparser.ConfigParser()
+    try:
+        config.read(cfg_path)
+        return bool(config.get("default", "access_key", fallback="")) and \
+            bool(config.get("default", "secret_key", fallback=""))
+    except configparser.Error:
+        return False
+
+
+def write_s3cfg(access_key, secret_key, path=None):
+    """Write a minimal ~/.s3cfg that s4cmd can read, owner-only permissions.
+
+    s4cmd only ever reads `[default] access_key` / `secret_key` from this
+    file (its `S3Handler.s3_keys_from_s3cfg`) -- host_base/host_bucket are
+    never consulted, since Termicast passes `--endpoint-url` explicitly per
+    show. Written at mode 0600: this file holds a live secret key.
+    """
+    cfg_path = Path(path) if path else s3cfg_path()
+    config = configparser.ConfigParser()
+    config["default"] = {"access_key": access_key, "secret_key": secret_key}
+    buffer = io.StringIO()
+    config.write(buffer)
+    from .publisher import atomic_write
+    atomic_write(cfg_path, buffer.getvalue().encode(), mode=0o600)
 
 
 def s4cmd_path():

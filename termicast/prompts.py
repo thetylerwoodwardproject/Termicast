@@ -345,14 +345,15 @@ PROMPT_HELP = {
 }
 
 
-def _read_value(prompt):
+def _read_value(prompt, *, password=False):
     """Read one line, letting Escape or Ctrl-C back out of the field.
 
     Falls back to a plain read when stdin is not a terminal so piped input,
-    cron runs, and tests behave exactly as before.
+    cron runs, and tests behave exactly as before. `password` masks the
+    typed characters (asterisks) and is never echoed back or logged.
     """
     if not sys.stdin.isatty():
-        return console.input(prompt)
+        return console.input(prompt, password=password)
     bindings = KeyBindings()
 
     @bindings.add(Keys.Escape, eager=True)
@@ -360,7 +361,7 @@ def _read_value(prompt):
     def _cancel(event):
         event.app.exit(exception=Cancelled())
 
-    return PromptSession(key_bindings=bindings).prompt(prompt)
+    return PromptSession(key_bindings=bindings).prompt(prompt, is_password=password)
 
 
 def text(label, default="", required=False, *, example=None):
@@ -384,6 +385,18 @@ def text(label, default="", required=False, *, example=None):
         if value or not required:
             return value
         error("This field is required.")
+
+
+def secret(label):
+    """Read one masked line (asterisks); never echoed, never given a default.
+
+    Unlike `text()`, there is no "keeps current" behavior -- callers use this
+    only for values Termicast never stores itself, so there is nothing to
+    keep. Escape or Ctrl-C raises Cancelled, unwinding to the enclosing menu.
+    """
+    console.print(label, style=ACCENT, markup=False)
+    cancel = "; Esc cancels" if sys.stdin.isatty() else ""
+    return _read_value(f"Value{cancel}: ", password=True).strip()
 
 
 def confirm(label, default=False):
@@ -629,6 +642,34 @@ def edit_menu(data, fields, episode=False):
             missing_media_metadata(data)
 
 
+def _ensure_s3_credentials():
+    """Offer to create ~/.s3cfg on the spot when no S3 credentials are found.
+
+    The access/secret key are written straight to ~/.s3cfg (mode 0600) by
+    `s3deploy.write_s3cfg` and never touch Termicast's own database, backups,
+    or show settings -- only s4cmd ever reads them back. If the file already
+    exists but is missing/invalid keys, it's left alone rather than silently
+    overwritten: it may hold other hand-edited settings (host_base, etc).
+    """
+    from .s3deploy import s3_credentials_present, s3cfg_path, write_s3cfg
+    if s3_credentials_present():
+        return
+    cfg_path = s3cfg_path()
+    if cfg_path.exists():
+        warning(f"{cfg_path} exists but Termicast can't find access_key/secret_key in it "
+                "under a [default] section; fix it manually, or the S3 check below will fail.")
+        return
+    if not confirm(f"No S3 credentials found. Create {cfg_path} now?", True):
+        return
+    access_key = secret("Access key")
+    secret_key = secret("Secret key")
+    if not access_key or not secret_key:
+        warning("Both keys are required; skipping ~/.s3cfg setup.")
+        return
+    write_s3cfg(access_key, secret_key)
+    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+
+
 def hosting_form(data):
     """Collect nonsecret destination settings; never ask for credentials."""
     from .storage import validate_storage
@@ -637,10 +678,11 @@ def hosting_form(data):
     staged = dict(data)
     staged["hosting"] = "s3" if selected == 2 else "local"
     if selected == 2:
-        console.print("Configure credentials OUTSIDE Termicast in ~/.s3cfg (s3cmd format). "
-                      "Never paste keys here. The publishing/cron account needs the same "
+        console.print("S3 credentials live in ~/.s3cfg (s3cmd format), never in Termicast's own "
+                      "database or backups. The publishing/cron account needs the same "
                       "credentials. Use a dedicated show prefix and configure public reads.\n"
                       "Example ~/.s3cfg: access_key, secret_key, host_base, host_bucket.", markup=False)
+        _ensure_s3_credentials()
         for field, label in (("endpoint_url", "HTTPS S3 API endpoint (blank for AWS; e.g. https://us-east-1.linodeobjects.com)"),
                              ("bucket", "Bucket name"),
                              ("prefix", "Show prefix (optional, no outer slashes)"),

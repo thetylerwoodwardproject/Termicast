@@ -1,3 +1,4 @@
+import stat
 import subprocess
 from unittest.mock import Mock
 
@@ -7,6 +8,7 @@ from termicast import s3deploy
 from termicast.models import new_show
 from termicast.s3deploy import (
     object_key, s4cmd_args, upload_file, deploy_paths, remote_rename, check_s3_destination,
+    s3_credentials_present, write_s3cfg,
 )
 
 
@@ -211,3 +213,46 @@ def test_deploy_paths_stops_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(s3deploy, "upload_file", fail)
     with pytest.raises(RuntimeError, match="audio/x.mp3"):
         deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
+
+
+def test_s3_credentials_present_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIA...")
+    monkeypatch.setenv("S3_SECRET_KEY", "shh")
+    assert s3_credentials_present(tmp_path / "missing.s3cfg") is True
+
+
+def test_s3_credentials_present_missing_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    assert s3_credentials_present(tmp_path / "missing.s3cfg") is False
+
+
+def test_s3_credentials_present_invalid_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    cfg = tmp_path / ".s3cfg"
+    cfg.write_text("not an ini file with a [default] section\n")
+    assert s3_credentials_present(cfg) is False
+
+
+def test_s3_credentials_present_valid_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    cfg = tmp_path / ".s3cfg"
+    write_s3cfg("AKIA...", "shh", path=cfg)
+    assert s3_credentials_present(cfg) is True
+
+
+def test_write_s3cfg_sets_owner_only_permissions(tmp_path):
+    cfg = tmp_path / ".s3cfg"
+    write_s3cfg("AKIA...", "shh", path=cfg)
+    assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+
+
+def test_write_s3cfg_content_is_readable_by_s3_credentials_present(tmp_path):
+    cfg = tmp_path / ".s3cfg"
+    write_s3cfg("my-access-key", "my-secret-key", path=cfg)
+    content = cfg.read_text()
+    assert "my-access-key" in content
+    assert "my-secret-key" in content
+    assert "[default]" in content

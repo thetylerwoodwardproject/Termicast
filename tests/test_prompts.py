@@ -79,3 +79,75 @@ def test_segments_cancel_keeps_existing_entries(monkeypatch):
     monkeypatch.setattr(prompts, "number", raiser)
     existing = [{"startTime": 0, "endTime": 10, "title": "Kept"}]
     assert prompts._segments(existing, soundbites=False) == existing
+
+
+def test_secret_masks_input_when_not_a_tty(monkeypatch):
+    monkeypatch.setattr(prompts.sys.stdin, "isatty", lambda: False)
+    calls = []
+    monkeypatch.setattr(prompts.console, "input",
+                        lambda prompt, password=False: calls.append((prompt, password)) or "typed-secret")
+    assert prompts.secret("Access key") == "typed-secret"
+    assert calls and calls[0][1] is True
+
+
+def test_ensure_s3_credentials_skips_when_credentials_present(monkeypatch):
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: True)
+    asked = []
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: asked.append(1) or True)
+    prompts._ensure_s3_credentials()
+    assert asked == []
+
+
+def test_ensure_s3_credentials_warns_without_overwriting_existing_invalid_file(monkeypatch, tmp_path):
+    from termicast import s3deploy
+    cfg = tmp_path / ".s3cfg"
+    cfg.write_text("garbage, no [default] section")
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: False)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: cfg)
+    asked = []
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: asked.append(1) or True)
+    prompts._ensure_s3_credentials()
+    assert asked == []
+    assert cfg.read_text() == "garbage, no [default] section"
+
+
+def test_ensure_s3_credentials_declines_setup(monkeypatch, tmp_path):
+    from termicast import s3deploy
+    cfg = tmp_path / ".s3cfg"
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: False)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: cfg)
+    written = []
+    monkeypatch.setattr(s3deploy, "write_s3cfg", lambda *a, **k: written.append((a, k)))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: False)
+    prompts._ensure_s3_credentials()
+    assert written == []
+    assert not cfg.exists()
+
+
+def test_ensure_s3_credentials_creates_file_when_accepted(monkeypatch, tmp_path):
+    from termicast import s3deploy
+    cfg = tmp_path / ".s3cfg"
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: False)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: cfg)
+    written = []
+    monkeypatch.setattr(s3deploy, "write_s3cfg", lambda ak, sk: written.append((ak, sk)))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: True)
+    keys = iter(["my-access-key", "my-secret-key"])
+    monkeypatch.setattr(prompts, "secret", lambda label: next(keys))
+    prompts._ensure_s3_credentials()
+    assert written == [("my-access-key", "my-secret-key")]
+
+
+def test_ensure_s3_credentials_requires_both_keys(monkeypatch, tmp_path):
+    from termicast import s3deploy
+    cfg = tmp_path / ".s3cfg"
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: False)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: cfg)
+    written = []
+    monkeypatch.setattr(s3deploy, "write_s3cfg", lambda ak, sk: written.append((ak, sk)))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: True)
+    keys = iter(["my-access-key", ""])
+    monkeypatch.setattr(prompts, "secret", lambda label: next(keys))
+    prompts._ensure_s3_credentials()
+    assert written == []

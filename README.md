@@ -200,10 +200,18 @@ Hosting is configured under **Hosting** in the show menu:
   directory + `base_url`), while media assets are uploaded with `s4cmd` to a
   bucket/prefix whose public root is a separate **asset base URL**
   (e.g. `https://my-bucket.us-east-1.linodeobjects.com/my-show`). The feed
-  references those asset URLs. Configure credentials outside Termicast in
+  references those asset URLs. Credentials live outside Termicast in
   `~/.s3cfg`; set the endpoint, bucket, prefix, and asset base URL in Termicast.
   `enabled` controls automatic deployment on publish/schedule; `deploy` works
   with valid configuration even when it is disabled.
+
+If `~/.s3cfg` doesn't exist yet (and no `S3_ACCESS_KEY`/`S3_SECRET_KEY` env
+vars are set), Termicast offers to write it for you: the access/secret key
+are read with masked input (`prompts.secret()`, backed by prompt_toolkit's
+`is_password`/Rich's `password=`) and written straight to `~/.s3cfg` at mode
+`0600` by `s3deploy.write_s3cfg()` — never persisted to Termicast's own
+database, show settings, or backups. An existing-but-invalid file is left
+alone rather than overwritten, since it may hold other hand-edited settings.
 
 Configuring S3 hosting verifies the destination is both listable and
 *writable* before continuing (`check_s3_destination()` in `s3deploy.py`
@@ -289,6 +297,13 @@ Termicast never sets object ACLs or modifies your web server.
 Import a feed (HTTPS URL or local XML) or a pre-archived manifest
 (`manifest.json` describing feed pages and staged assets). Identity (GUIDs,
 chapters, extension data) is preserved.
+
+The output directory, base URL, and hosting/S3 settings entered at the start
+of an import are checkpointed to `<data-dir>/import-resume.json` (never
+credentials) after each is confirmed. If the import then fails or is
+cancelled for any reason, starting **Import existing podcast** again offers
+to resume from that checkpoint instead of re-asking those fields. It's
+cleared on a successful import; declining the resume prompt clears it too.
 
 > [!IMPORTANT]
 > After import, run `doctor`, then ask the current host to configure a

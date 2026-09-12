@@ -3,6 +3,7 @@ import os
 import pytest
 
 from termicast import cli
+from termicast.models import new_show
 
 
 def test_help_lists_new_commands(data_dir, capsys):
@@ -126,3 +127,59 @@ def test_configure_hosting_declines_retry_and_cancels(monkeypatch):
     monkeypatch.setattr(cli, "confirm", lambda *a, **k: False)
     with pytest.raises(Cancelled):
         cli._configure_hosting({})
+
+
+def test_load_resume_returns_none_without_a_checkpoint(db):
+    assert cli._load_resume(db) is None
+
+
+def test_save_and_load_resume_round_trip(db):
+    destination = new_show(output_dir="/srv/show", hosting="s3", bucket="b")
+    cli._save_resume(db, destination, True)
+    loaded_destination, loaded_overwrite = cli._load_resume(db)
+    assert loaded_destination == destination
+    assert loaded_overwrite is True
+
+
+def test_clear_resume_is_a_noop_without_a_checkpoint(db):
+    cli._clear_resume(db)
+
+
+def test_load_resume_ignores_a_corrupt_checkpoint(db):
+    path = cli._resume_path(db)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json")
+    assert cli._load_resume(db) is None
+
+
+def test_create_or_import_resumes_saved_setup_and_skips_pickup(monkeypatch, db):
+    saved = new_show(output_dir="/srv/show", base_url="https://example.org/show", hosting="local")
+    cli._save_resume(db, saved, False)
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+
+    def fail_pick(destination):
+        raise AssertionError("should not re-prompt for output_dir when resuming")
+    monkeypatch.setattr(cli, "_pick_output_dir", fail_pick)
+
+    class Stop(Exception):
+        pass
+
+    monkeypatch.setattr(cli, "menu", lambda *a, **k: (_ for _ in ()).throw(Stop()))
+    with pytest.raises(Stop):
+        cli._create_or_import(db, object(), importing=True)
+
+
+def test_create_or_import_declines_resume_clears_checkpoint_and_starts_fresh(monkeypatch, db):
+    saved = new_show(output_dir="/srv/show", base_url="https://example.org/show", hosting="local")
+    cli._save_resume(db, saved, False)
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: False)
+
+    class Stop(Exception):
+        pass
+
+    def stop_pick(destination):
+        raise Stop()
+    monkeypatch.setattr(cli, "_pick_output_dir", stop_pick)
+    with pytest.raises(Stop):
+        cli._create_or_import(db, object(), importing=True)
+    assert cli._load_resume(db) is None

@@ -234,6 +234,13 @@ If you already publish a podcast somewhere else, choose
 3. Keeps your episode IDs and details intact.
 4. Generates a new feed at your chosen location.
 
+> [!TIP]
+> The output directory, base URL, and hosting/S3 settings you enter at the
+> start are saved as you go. If the import fails partway through — a bad S3
+> permission, a naming collision, a network hiccup — starting **Import
+> existing podcast** again offers to resume right where you left off instead
+> of re-asking all of those questions from scratch.
+
 If your current feed uses OP3 metrics (enclosure URLs prefixed with
 `https://op3.dev/e/`), Termicast detects that and enables **OP3 podcast metrics**
 automatically. You can turn it off later under **Edit field** in the settings
@@ -297,8 +304,13 @@ files. You'll set two addresses:
   `https://my-bucket.us-east-1.linodeobjects.com/my-show`).
 
 > [!IMPORTANT]
-> Put your S3 credentials in a file called `~/.s3cfg` on the server (never in
-> Termicast). Termicast only stores the bucket name and addresses.
+> Your S3 credentials live in a file called `~/.s3cfg` on the server — never
+> in Termicast's own database, settings, or backups. If that file doesn't
+> exist yet, Termicast offers to create it for you right here: it asks for
+> your access key and secret key with masked input (never echoed to the
+> screen), writes them straight to `~/.s3cfg` with owner-only permissions,
+> and never keeps a copy anywhere else. Say no and set it up yourself if
+> you'd rather.
 
 > [!TIP]
 > Termicast checks that your credentials can both list *and write to* the
