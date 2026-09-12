@@ -1,5 +1,6 @@
 # Termicast
 
+> [!TIP]
 > New here? Start with the **[User Guide](USER_GUIDE.md)** for a plain-English
 > walkthrough. This README is the technical reference.
 
@@ -109,9 +110,10 @@ with other episodes are rejected before install.
 
 ## Scheduling and cron
 
-A scheduled episode stays out of the feed until `publish-due` releases it. That
-command is non-interactive and is meant to run from cron. Without it, scheduled
-episodes never go live.
+> [!WARNING]
+> A scheduled episode stays out of the feed until `publish-due` releases it.
+> That command is non-interactive and is meant to run from cron. Without it,
+> scheduled episodes never go live.
 
 Run it by hand:
 
@@ -126,16 +128,15 @@ output directories):
 */5 * * * * /opt/termicast/.venv/bin/termicast --data-dir /srv/termicast/state publish-due
 ```
 
-Notes:
-
-- Use the **same `--data-dir`** for the interactive app, cron, `validate`,
-  `backup`, and recovery, or they will not see the same schedules.
-- A five-minute interval releases at the **next run**, not the exact scheduled
-  second.
-- Cron does not need venv activation; point it straight at the venv binary.
-- Omit `--data-dir` if state lives in the default `~/.local/share/termicast/`.
-- `publish-due` also retries shows left "dirty" by a previously failed
-  publication, so a transient error self-heals on the next tick.
+> [!NOTE]
+> - Use the **same `--data-dir`** for the interactive app, cron, `validate`,
+>   `backup`, and recovery, or they will not see the same schedules.
+> - A five-minute interval releases at the **next run**, not the exact
+>   scheduled second.
+> - Cron does not need venv activation; point it straight at the venv binary.
+> - Omit `--data-dir` if state lives in the default `~/.local/share/termicast/`.
+> - `publish-due` also retries shows left "dirty" by a previously failed
+>   publication, so a transient error self-heals on the next tick.
 
 ## Hosting
 
@@ -157,12 +158,13 @@ Hosting is configured under **Hosting** in the show menu:
   `enabled` controls automatic deployment on publish/schedule; `deploy` works
   with valid configuration even when it is disabled.
 
-By default, once a media asset is on S3 its local working copy is removed, so
-the output directory holds only `feed.xml` (plus regenerated chapter/transcript
-files during a publish). Set **Keep a local copy** (`keep_local_media`) in
-Hosting to retain the working copies for redundancy and media-inclusive
-backups. Media already on S3 with no local copy is skipped on later deploys —
-remote objects are never deleted automatically.
+> [!IMPORTANT]
+> By default, once a media asset is on S3 its local working copy is removed,
+> so the output directory holds only `feed.xml` (plus regenerated
+> chapter/transcript files during a publish). Set **Keep a local copy**
+> (`keep_local_media`) in Hosting to retain the working copies for redundancy
+> and media-inclusive backups. Media already on S3 with no local copy is
+> skipped on later deploys — remote objects are never deleted automatically.
 
 `feed.xml` is written last, after its media is in place, so the feed never
 references a missing file. Deployment uses one `s4cmd` subprocess at a time
@@ -182,10 +184,13 @@ whichever show it is deploying. Several podcasts can therefore publish to
 different buckets at the same time. Two shows may also share one bucket under
 separate prefixes; overlapping prefixes are rejected when the show is saved.
 
-Credentials are the exception. `s4cmd` reads a single `~/.s3cfg` — and only its
-`access_key` and `secret_key` (`host_base` is ignored, since Termicast passes
-the endpoint explicitly per show). Every show therefore deploys with the same
-key pair. What that allows, and what it does not:
+> [!CAUTION]
+> Credentials are the exception. `s4cmd` reads a single `~/.s3cfg` — and only
+> its `access_key` and `secret_key` (`host_base` is ignored, since Termicast
+> passes the endpoint explicitly per show). Every show therefore deploys with
+> the same key pair.
+
+What that allows, and what it does not:
 
 | Setup | Supported |
 | --- | --- |
@@ -215,9 +220,11 @@ Termicast never sets object ACLs or modifies your web server.
 
 Import a feed (HTTPS URL or local XML) or a pre-archived manifest
 (`manifest.json` describing feed pages and staged assets). Identity (GUIDs,
-chapters, extension data) is preserved. After import, run `doctor`, then ask the
-current host to configure a permanent HTTP 301 redirect from the old feed URL to
-the new `.../feed.xml`.
+chapters, extension data) is preserved.
+
+> [!IMPORTANT]
+> After import, run `doctor`, then ask the current host to configure a
+> permanent HTTP 301 redirect from the old feed URL to the new `.../feed.xml`.
 
 `termicast archive <feed> <dest-dir>` downloads a feed, its paginated pages
 (`atom:link rel="next"`), and referenced assets into a persistent directory with
@@ -229,17 +236,22 @@ re-imported later without downloading the catalog again.
 
 Enable **OP3 podcast metrics** under **Edit field** in the settings review to
 prefix each episode's enclosure URL with `https://op3.dev/e/` and collect open
-download analytics. The stored media URL is unchanged; the prefix is applied
-only when the feed is generated. Importing a feed that already uses OP3
-(enclosure URLs starting with `https://op3.dev/e/`) enables it automatically;
-turn it off to serve unprefixed URLs.
+download analytics.
+
+> [!NOTE]
+> The stored media URL is unchanged; the prefix is applied only when the feed
+> is generated. Importing a feed that already uses OP3 (enclosure URLs
+> starting with `https://op3.dev/e/`) enables it automatically; turn it off to
+> serve unprefixed URLs.
 
 ## Backup and restore
 
 `termicast backup` produces a private (`0600`) ZIP of saved state, feeds, and
 chapters; `--include-media` also copies `audio/`, `images/`, and `transcripts/`.
-Restore is manual: stop cron, extract into a private directory, restore the
-database and outputs, regenerate, and verify with `validate` and `doctor`.
+
+> [!NOTE]
+> Restore is manual: stop cron, extract into a private directory, restore the
+> database and outputs, regenerate, and verify with `validate` and `doctor`.
 
 ## Planned additions
 
