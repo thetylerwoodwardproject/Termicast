@@ -190,6 +190,28 @@ chapters; `--include-media` also copies `audio/`, `images/`, and `transcripts/`.
 Restore is manual: stop cron, extract into a private directory, restore the
 database and outputs, regenerate, and verify with `validate` and `doctor`.
 
+## Planned additions
+
+We're planning optional tools to help prepare podcast episodes:
+
+- **Assisted writing:** Generate editable titles and descriptions using
+  Claude, OpenAI, or self-hosted Ollama models, guided by your preferred
+  tone, formatting, and writing style.
+- **Automatic transcription:** Transcribe audio using OpenAI's cloud API
+  or local Python Whisper. An additional OpenAI option will automatically
+  detect speaker turns for review and naming.
+- **Editable transcripts:** Correct text, timestamps, and speaker names
+  within Termicast or through editors such as nano and vim, preserving
+  those edits when publishing or regenerating files.
+
+Choose writing and transcription providers independently. A small VPS
+could use OpenAI transcription with Claude writing. A home server could
+combine local Whisper with Claude, OpenAI, or Ollama models such as
+`qwen3.5:4b`. Local Whisper will initially support manual speaker labels.
+
+These features will be optional, with generated content reviewed before
+publication. They are planned additions, with no committed release date.
+
 ## Limits
 
 Media probing and downloads are bounded (2 GiB default, configurable via
