@@ -314,7 +314,13 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     slugs = plan_slugs(episodes, naming, naming_fallback) if naming else {}
     shared = _shared_asset_urls(episodes)
     _check_name_destinations(assets, slugs.values())
-    with tempfile.TemporaryDirectory(prefix=".termicast-import-", dir=output.parent) as temporary:
+    # A pre-created, empty output directory is already writable by this
+    # account (that's the point of pre-creating it), so stage inside it and
+    # skip needing write access to its parent (often a shared web root).
+    # A brand-new output still has to be staged next to itself so the fast
+    # path below can install it with a single same-filesystem rename.
+    stage_parent = output if output.exists() else output.parent
+    with tempfile.TemporaryDirectory(prefix=".termicast-import-", dir=stage_parent) as temporary:
         stage = Path(temporary) / "public"
         for folder in ("audio", "chapters", "images/episodes", "images/show", "images/chapters", "transcripts"):
             (stage / folder).mkdir(parents=True)
