@@ -277,6 +277,16 @@ Under **4. Hosting** in your show's menu:
 **Local hosting** is simplest: your web server serves everything — feed and
 media — from the output folder.
 
+> [!TIP]
+> Termicast will create your output folder for you if it doesn't already
+> exist — but that needs your account to have write access to its *parent*
+> folder too (e.g. `/var/www`), which is often locked down on a shared
+> server. If you hit a permission error, ask whoever manages the server to
+> create the folder and hand it to you instead: `sudo mkdir -p
+> /var/www/mypodcast && sudo chown yourusername /var/www/mypodcast`.
+> Termicast only needs write access to that one folder from then on — never
+> to the shared server directory around it.
+
 **S3 storage** (Amazon S3, Linode, etc.) keeps your feed on your web server but
 moves the audio and artwork into a bucket, which is usually cheaper for big
 files. You'll set two addresses:

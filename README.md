@@ -213,6 +213,17 @@ Hosting is configured under **Hosting** in the show menu:
 > and media-inclusive backups. Media already on S3 with no local copy is
 > skipped on later deploys — remote objects are never deleted automatically.
 
+An output directory is not required to exist beforehand — importing or
+creating a show will create it. Doing so needs write access to its *parent*
+directory, though, which on a shared web server (e.g. `/var/www`) is often
+root-owned. If that's the case, pre-create the show's own folder and hand it
+to the account running Termicast instead:
+`sudo mkdir -p /var/www/mypodcast && sudo chown "$USER" /var/www/mypodcast`.
+Termicast stages and writes only inside a directory that already exists, so
+this needs no further access to the shared parent. A pre-existing directory
+may also already hold unrelated files — only files Termicast itself created
+are ever touched or overwritten.
+
 `feed.xml` is written last, after its media is in place, so the feed never
 references a missing file. Deployment uses one `s4cmd` subprocess at a time
 (64 MiB single-part threshold, 16 MiB multipart parts, 2 workers), sets explicit
