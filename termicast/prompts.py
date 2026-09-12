@@ -5,9 +5,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import math
+import sys
 from zoneinfo import ZoneInfo
 
 import questionary
+from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.keys import Keys
 
@@ -17,7 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .models import new_episode, new_show, slug_error, suggest_slug
+from .models import (new_episode, new_show, scheme_slug, slug_error, suggest_slug)
 from .faq import FAQ
 from .validation import (
     CATEGORIES, inspect_artwork, local_to_utc, parse_time, probe_media,
@@ -69,6 +71,17 @@ class ExitRequested(BaseException):
     """Unwind nested menus without an action handler swallowing global exit."""
 
 
+class Cancelled(BaseException):
+    """Back out of the value being entered, unwinding to the enclosing menu.
+
+    Raised by `text` when Escape or Ctrl-C is pressed at a field. Like
+    ExitRequested it derives from BaseException so the broad `except Exception`
+    handlers around menu actions cannot report a deliberate cancel as a
+    failure; each menu catches it explicitly and redraws, leaving the record
+    being edited exactly as it was.
+    """
+
+
 @contextmanager
 def menu_utilities(backup_action):
     token = _backup_action.set(backup_action)
@@ -102,6 +115,8 @@ SHOW_ESSENTIALS = (
     "title", "description", "author", "owner_email", "artwork_url",
     "explicit", "timezone", "category", "output_dir", "base_url",
 )
+
+S3_SETTINGS = ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media")
 
 EXPORT_NOTICE = (
     "Smaller files help listeners on slower connections and reduce hosting bandwidth. "
@@ -259,6 +274,8 @@ def menu(title, options, default=None, headers=None):
                     action()
             except EOFError:
                 raise
+            except Cancelled:
+                console.print("Cancelled.")
             except Exception as exc:
                 error(f"Menu action failed: {exc}")
             redraw = True
@@ -328,8 +345,29 @@ PROMPT_HELP = {
 }
 
 
+def _read_value(prompt):
+    """Read one line, letting Escape or Ctrl-C back out of the field.
+
+    Falls back to a plain read when stdin is not a terminal so piped input,
+    cron runs, and tests behave exactly as before.
+    """
+    if not sys.stdin.isatty():
+        return console.input(prompt)
+    bindings = KeyBindings()
+
+    @bindings.add(Keys.Escape, eager=True)
+    @bindings.add(Keys.ControlC, eager=True)
+    def _cancel(event):
+        event.app.exit(exception=Cancelled())
+
+    return PromptSession(key_bindings=bindings).prompt(prompt)
+
+
 def text(label, default="", required=False, *, example=None):
-    """Blank retains a default; a single '-' explicitly clears an optional field."""
+    """Blank retains a default; a single '-' explicitly clears an optional field.
+
+    Escape or Ctrl-C raises Cancelled, which unwinds to the enclosing menu.
+    """
     while True:
         console.print(label, style=ACCENT, markup=False)
         key = label.split(" (", 1)[0].casefold()
@@ -340,7 +378,8 @@ def text(label, default="", required=False, *, example=None):
             console.print(f"Example: {sample}", style="dim", markup=False)
         if default is not None and str(default) != "":
             console.print(f"Current: {default}", markup=False)
-        value = console.input("Value (Enter keeps current; - clears): ").strip()
+        cancel = "; Esc cancels" if sys.stdin.isatty() else ""
+        value = _read_value(f"Value (Enter keeps current; - clears{cancel}): ").strip()
         value = "" if value == "-" else value if value else str(default if default is not None else "")
         if value or not required:
             return value
@@ -422,10 +461,14 @@ def _podroll(current):
             entry = entries[index]
         else:
             entry = {}
-        updated = {key: text(label, entry.get(key, ""), required=key == "feedGuid")
-                   for key, label in (("feedGuid", "Feed GUID (UUID, required)"),
-                                      ("feedUrl", "Feed URL (optional HTTPS)"),
-                                      ("title", "Title (optional)"))}
+        try:
+            updated = {key: text(label, entry.get(key, ""), required=key == "feedGuid")
+                       for key, label in (("feedGuid", "Feed GUID (UUID, required)"),
+                                          ("feedUrl", "Feed URL (optional HTTPS)"),
+                                          ("title", "Title (optional)"))}
+        except Cancelled:
+            console.print("Cancelled. This entry was not saved.")
+            continue
         if action == 1:
             entries.append(updated)
         else:
@@ -454,41 +497,44 @@ def _segments(current, soundbites):
                 entries.pop(index)
                 continue
             old = entries[index]
-        while True:
-            start = number("Start (HH:MM:SS, MM:SS, or seconds)", old.get("startTime", 0))
-            stop = old.get("endTime")
-            if soundbites and old:
-                stop = old["startTime"] + old["duration"]
-            end = number("Stop (HH:MM:SS, MM:SS, or seconds)", stop)
-            if end <= start:
-                error("Stop must be after start.")
-                continue
-            previous = entries[index - 1] if index else None
-            following = entries[index + 1] if index + 1 < len(entries) else None
-            previous_end = (previous.get("endTime", previous["startTime"] +
-                            previous.get("duration", 0)) if previous else 0)
-            if start < previous_end or (following and end > following["startTime"]):
-                error("Entries must be chronological and must not overlap.")
-                continue
-            title = text("Title (maximum 128 characters)" if soundbites else "Title",
-                         old.get("title", ""), required=True)
-            if soundbites and len(title) > 128:
-                error("Soundbite titles must not exceed 128 characters.")
-                continue
-            entry = dict(old, startTime=start, title=title)
-            entry["duration" if soundbites else "endTime"] = end - start if soundbites else end
-            if soundbites and "stop" in entry:
-                entry["stop"] = end
-            if not soundbites:
-                entry["img"] = text("Chapter artwork URL (optional HTTPS JPEG/PNG RGB)", old.get("img", ""))
-                entry["url"] = text("Chapter link (optional HTTPS)", old.get("url", ""))
-            if soundbites and not 15 <= end - start <= 120:
-                warning("Recommended soundbite duration is 15 to 120 seconds.")
-            if action == 1:
-                entries.append(entry)
-            else:
-                entries[index] = entry
-            break
+        try:
+            while True:
+                start = number("Start (HH:MM:SS, MM:SS, or seconds)", old.get("startTime", 0))
+                stop = old.get("endTime")
+                if soundbites and old:
+                    stop = old["startTime"] + old["duration"]
+                end = number("Stop (HH:MM:SS, MM:SS, or seconds)", stop)
+                if end <= start:
+                    error("Stop must be after start.")
+                    continue
+                previous = entries[index - 1] if index else None
+                following = entries[index + 1] if index + 1 < len(entries) else None
+                previous_end = (previous.get("endTime", previous["startTime"] +
+                                previous.get("duration", 0)) if previous else 0)
+                if start < previous_end or (following and end > following["startTime"]):
+                    error("Entries must be chronological and must not overlap.")
+                    continue
+                title = text("Title (maximum 128 characters)" if soundbites else "Title",
+                             old.get("title", ""), required=True)
+                if soundbites and len(title) > 128:
+                    error("Soundbite titles must not exceed 128 characters.")
+                    continue
+                entry = dict(old, startTime=start, title=title)
+                entry["duration" if soundbites else "endTime"] = end - start if soundbites else end
+                if soundbites and "stop" in entry:
+                    entry["stop"] = end
+                if not soundbites:
+                    entry["img"] = text("Chapter artwork URL (optional HTTPS JPEG/PNG RGB)", old.get("img", ""))
+                    entry["url"] = text("Chapter link (optional HTTPS)", old.get("url", ""))
+                if soundbites and not 15 <= end - start <= 120:
+                    warning("Recommended soundbite duration is 15 to 120 seconds.")
+                if action == 1:
+                    entries.append(entry)
+                else:
+                    entries[index] = entry
+                break
+        except Cancelled:
+            console.print("Cancelled. This entry was not saved.")
 
 
 def edit_field(data, field, episode=False):
@@ -577,10 +623,14 @@ def edit_menu(data, fields, episode=False):
                     + ["Back"])
     if selected <= len(fields):
         field = fields[selected - 1]
-        if field == "hosting":
-            hosting_form(data)
+        try:
+            if field == "hosting":
+                hosting_form(data)
+                return
+            edit_field(data, field, episode)
+        except Cancelled:
+            console.print(f"Cancelled. {field.replace('_', ' ').title()} is unchanged.")
             return
-        edit_field(data, field, episode)
         if field == "mp3_url":
             missing_media_metadata(data)
 
@@ -590,7 +640,8 @@ def hosting_form(data):
     from .storage import validate_storage
     selected = menu("Hosting", ["Local web server", "S3-compatible storage"],
                     2 if data.get("hosting") == "s3" else 1)
-    data["hosting"] = "s3" if selected == 2 else "local"
+    staged = dict(data)
+    staged["hosting"] = "s3" if selected == 2 else "local"
     if selected == 2:
         console.print("Configure credentials OUTSIDE Termicast in ~/.s3cfg (s3cmd format). "
                       "Never paste keys here. The publishing/cron account needs the same "
@@ -600,17 +651,20 @@ def hosting_form(data):
                              ("bucket", "Bucket name"),
                              ("prefix", "Show prefix (optional, no outer slashes)"),
                              ("asset_base_url", "Public asset URL of the bucket/prefix (e.g. https://my-bucket.us-east-1.linodeobjects.com/my-show)")):
-            data[field] = text(label, data.get(field, ""), required=field in ("bucket", "asset_base_url"))
-        data["enabled"] = confirm("Automatically deploy on publish/schedule?", bool(data.get("enabled", False)))
-        data["keep_local_media"] = confirm(
+            staged[field] = text(label, staged.get(field, ""), required=field in ("bucket", "asset_base_url"))
+        staged["enabled"] = confirm("Automatically deploy on publish/schedule?", bool(staged.get("enabled", False)))
+        staged["keep_local_media"] = confirm(
             "Keep a local copy of media after it's uploaded to S3 (for redundancy and media-inclusive backups)?",
-            bool(data.get("keep_local_media", False)))
+            bool(staged.get("keep_local_media", False)))
     else:
-        for field in ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media"):
-            data.pop(field, None)
-    errors = validate_storage(data)
+        for field in S3_SETTINGS:
+            staged.pop(field, None)
+    errors = validate_storage(staged)
     if errors:
         raise ValueError("; ".join(errors))
+    for field in S3_SETTINGS:
+        data.pop(field, None)
+    data.update(staged)
 
 
 def show_form(show, collect=False):
@@ -618,7 +672,11 @@ def show_form(show, collect=False):
     data = deepcopy(show)
     if collect:
         for field in SHOW_ESSENTIALS:
-            edit_field(data, field)
+            try:
+                edit_field(data, field)
+            except Cancelled:
+                console.print("Cancelled. The podcast was not created.")
+                return None
     while True:
         if collect:
             data["guid"] = new_show(base_url=data["base_url"])["guid"]
@@ -640,8 +698,11 @@ def show_form(show, collect=False):
 def schedule_time(show, *, confirm_time=True):
     zone = show.get("timezone", "UTC")
     while True:
-        raw = text(f"Publication time in {zone} (ISO date/time; explicit offset resolves DST; - cancels)",
-                   example="2027-06-15T09:00:00 (local time) or 2027-06-15T09:00:00+00:00 (explicit UTC offset); choose a future date")
+        try:
+            raw = text(f"Publication time in {zone} (ISO date/time; explicit offset resolves DST; - cancels)",
+                       example="2027-06-15T09:00:00 (local time) or 2027-06-15T09:00:00+00:00 (explicit UTC offset); choose a future date")
+        except Cancelled:
+            return None
         if not raw:
             return None
         try:
@@ -683,6 +744,8 @@ def optional_assets(episode, show):
             console.print(f"On save: {asset_root(show)}/transcripts/{filename}\nPublic URL: {url}", markup=False)
             if confirm("Save this transcript with the episode?", False):
                 episode.update(transcript_url=url, _transcript_vtt=value)
+    except Cancelled:
+        console.print("Cancelled. No asset was added.")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         error(f"Asset was not added: {exc}")
 
@@ -744,10 +807,14 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
     image_preset = image_preset or show.get("image_preset", "compact")
 
     episode = new_episode(explicit=show.get("explicit", False))
-    if slug is None:
-        episode["season_number"] = number("Season number (optional)", None, integer=True, optional=True, positive=True)
-        episode["episode_number"] = number("Episode number (optional)", None, integer=True, optional=True, positive=True)
-    chosen_slug = _choose_slug(db, show, episode, slug)
+    try:
+        if slug is None:
+            episode["season_number"] = number("Season number (optional)", None, integer=True, optional=True, positive=True)
+            episode["episode_number"] = number("Episode number (optional)", None, integer=True, optional=True, positive=True)
+        chosen_slug = _choose_slug(db, show, episode, slug)
+    except Cancelled:
+        console.print("Cancelled. No episode was added and no media was prepared.")
+        return
     show_export_notice()
 
     prepared = prepare_media(show, roles, slug=chosen_slug, audio_preset=audio_preset,
@@ -767,7 +834,10 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
         episode["transcript_path"] = prepared.transcript_relative
 
     for field in ("title", "description"):
-        edit_field(episode, field, episode=True)
+        try:
+            edit_field(episode, field, episode=True)
+        except Cancelled:
+            console.print(f"Cancelled. Set the {field} from the review below before publishing.")
 
     while True:
         review("Episode review", episode)
@@ -809,38 +879,129 @@ def episode_form(show, publisher, db):
     console.print("Add episode from local files. Local files must be on this machine. "
                   "Audio is required; artwork and transcript are optional and identified by type.",
                   markup=False)
-    audio = text("Audio file path (mp3, wav, flac, m4a, ogg, opus)", required=True)
-    paths = [audio]
-    if confirm("Add cover artwork file?", False):
-        paths.append(text("Artwork file path (JPEG/PNG)", required=True))
-    if confirm("Add a WebVTT transcript file?", False):
-        paths.append(text("Transcript file path (.vtt)", required=True))
+    try:
+        paths = [text("Audio file path (mp3, wav, flac, m4a, ogg, opus)", required=True)]
+        if confirm("Add cover artwork file?", False):
+            paths.append(text("Artwork file path (JPEG/PNG)", required=True))
+        if confirm("Add a WebVTT transcript file?", False):
+            paths.append(text("Transcript file path (.vtt)", required=True))
+    except Cancelled:
+        console.print("Cancelled. No episode was added.")
+        return
     add_episode(db, publisher, show, paths)
 
 
-def edit_episode_form(show, publisher, saved):
+def _rename_default(db, show, saved):
+    """Suggest the sequential name this episode would get: its number, else its place."""
+    if saved.get("slug"):
+        return saved["slug"]
+    scheme = "sep" if saved.get("season_number") is not None else "ep"
+    episodes = sorted(db.list_episodes(show["id"]),
+                      key=lambda e: e.get("published_at") or "")
+    position = next((index for index, e in enumerate(episodes, 1)
+                     if e["guid"] == saved["guid"]), len(episodes) + 1)
+    return scheme_slug(saved, scheme, position=position) or ""
+
+
+def rename_form(db, show, publisher, saved):
+    """Rename one episode's files. Returns True when something was renamed."""
+    from .rename import clear_orphans, plan_rename, rename_episode
+    console.print("Renaming changes the public file names of this episode's audio, artwork, "
+                  "and transcript. Chapter JSON and the managed transcript follow the new "
+                  "name automatically.", markup=False)
+    others = [e for e in db.list_episodes(show["id"]) if e["guid"] != saved["guid"]]
+    while True:
+        value = text("Slug (letters, numbers, hyphens, underscores)",
+                     _rename_default(db, show, saved), required=True)
+        reason = slug_error(value)
+        if reason:
+            error(f"Invalid slug: {reason}")
+            continue
+        try:
+            check_slug_collision(db, show["id"], value, exclude_guid=saved["guid"])
+            plan = plan_rename(show, saved, value, others=others)
+        except ValueError as exc:
+            error(exc)
+            continue
+        for message in plan.warnings:
+            warning(message)
+        for relative in plan.missing:
+            error(f"No local file to move: {relative}")
+        for relative in plan.blocked:
+            error(f"Destination already exists: {relative}")
+        if plan.missing:
+            warning("Media uploaded to S3 without 'Keep a local copy of media' has no local "
+                    "file to rename. Enable that setting, or restore from a backup made with "
+                    "--include-media, and try again.")
+            return False
+        if plan.blocked:
+            return False
+        if not plan.moves:
+            warning("Nothing to rename: this episode has no managed local files.")
+            return False
+        console.print("Files to move:", style=ACCENT)
+        for old, new in plan.moves:
+            console.print(f"  {old}  ->  {new}", markup=False)
+        console.print("Public URLs:", style=ACCENT)
+        for old, new in plan.url_changes:
+            console.print(f"  {old}\n  ->  {new}", markup=False)
+        if saved["status"] == "published":
+            warning("This episode is already published, and the URLs above are live. "
+                    "Apps and directories that cached the old URL will get 404s; copies "
+                    "already downloaded keep working.")
+            if show.get("hosting") == "s3":
+                warning("On S3 the old objects are NOT deleted, and the new names are not "
+                        "public until the next deploy.")
+            if not confirm(f"Rename the published episode {saved['title']!r} anyway?", False):
+                return False
+        elif not confirm("Rename these files?", True):
+            return False
+        updated_show, _ = rename_episode(db, show, saved, plan)
+        publisher.regenerate(show["id"])
+        console.print(f"Renamed to {value}.", style=ACCENT)
+        if plan.orphans and confirm(f"Delete {len(plan.orphans)} file(s) left behind at the "
+                                    "old name?", False):
+            for relative in clear_orphans(updated_show, plan):
+                console.print(f"Deleted {relative}", markup=False)
+        if updated_show.get("hosting") == "s3" and not updated_show.get("enabled"):
+            warning(f"Upload the renamed files with: termicast deploy {show['id']}")
+        return True
+
+
+def edit_episode_form(db, show, publisher, saved):
     episode = deepcopy(saved)
     while True:
         review("Edit episode (GUID is permanent)", episode)
         options = ["Edit field", "Save", "Cancel"]
         if saved["status"] != "published":
             options += ["Reschedule", "Publish now"]
-        options += ["Add optional assets"]
-        action = menu("Episode editor", options, 1)
-        if action == len(options):
+        options += ["Rename files", "Add optional assets"]
+        # Match on the label: the list length varies with the episode's status.
+        choice = options[menu("Episode editor", options, 1) - 1]
+        if choice == "Add optional assets":
             optional_assets(episode, show)
             continue
-        if action == 3:
+        if choice == "Cancel":
             return
-        if action == 1:
+        if choice == "Edit field":
             edit_menu(episode, EPISODE_FIELDS, episode=True)
             continue
-        if action == 4:
+        if choice == "Rename files":
+            if episode != saved:
+                warning("Save or cancel your other changes before renaming files.")
+                continue
+            try:
+                if rename_form(db, show, publisher, saved):
+                    return
+            except Cancelled:
+                console.print("Cancelled. No files were renamed.")
+            continue
+        if choice == "Reschedule":
             when = schedule_time(show, confirm_time=False)
             if when:
                 episode.update(publish_at=when.isoformat(), status="scheduled")
             continue
-        if action == 5:
+        if choice == "Publish now":
             episode.update(publish_at=datetime.now(timezone.utc).isoformat(), status="published")
         title_for_save(episode)
         if not confirm("Save episode changes?", True):
@@ -897,5 +1058,7 @@ def hosting_menu(db, publisher, show):
                 console.print(migration_guidance(show), markup=False)
         except ExitRequested:
             raise
+        except Cancelled:
+            console.print("Cancelled. Hosting settings are unchanged.")
         except Exception as exc:
             error(f"Hosting action failed: {exc}")

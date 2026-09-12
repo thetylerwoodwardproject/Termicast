@@ -6,18 +6,48 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 
 from .storage import validate_conflicting_prefixes
 from .validation import validate_show
 
 
+_held = threading.local()
+
+
 @contextmanager
 def filesystem_lock(path):
-    with open(path, "a+b") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+    """Exclusive across processes, re-entrant within one thread.
+
+    flock locks an open file description rather than a process, so opening the
+    same path a second time blocks against our own first handle. Counting the
+    depth here lets a caller that already holds a lock call a helper that takes
+    it again -- publication, backup, and repair all do -- while another process
+    still contends for the real flock.
+
+    The depth lives in thread-local state so a second thread cannot mistake
+    another thread's lock for its own; it takes the real flock and waits.
+    """
+    path = os.path.realpath(path)
+    depths = getattr(_held, "depths", None)
+    if depths is None:
+        depths = _held.depths = {}
+    if depths.get(path):
+        depths[path] += 1
         try:
             yield
         finally:
+            depths[path] -= 1
+        return
+    with open(path, "a+b") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        depths[path] = 1
+        try:
+            yield
+        finally:
+            # Reset rather than decrement: a mispaired nested block must never
+            # leave a phantom depth that silently disables locking.
+            depths[path] = 0
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 

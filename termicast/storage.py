@@ -8,7 +8,7 @@ directory that holds `feed.xml` and the working copy of the assets.
 """
 
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .validation import validate_https
 
@@ -26,6 +26,25 @@ def asset_base(show):
     if show.get("hosting") == "s3":
         return (show.get("asset_base_url") or show.get("base_url", "")).rstrip("/")
     return show["base_url"].rstrip("/")
+
+
+def local_relative(show, url):
+    """Relative asset path for a public URL of this show, or None if foreign.
+
+    The inverse of `asset_base(show) + "/" + relative`. Used to find the file
+    behind a feed URL when the episode record carries no stored path, as
+    imported episodes do.
+    """
+    if not url:
+        return None
+    base = urlsplit(asset_base(show) + "/")
+    parts = urlsplit(url)
+    if (parts.scheme, parts.netloc) != (base.scheme, base.netloc):
+        return None
+    if not parts.path.startswith(base.path):
+        return None
+    relative = unquote(parts.path[len(base.path):])
+    return Path(relative) if relative else None
 
 
 def validate_storage(show):

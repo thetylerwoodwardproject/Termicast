@@ -38,6 +38,44 @@ and preserve your in-memory form. X exits cleanly and discards unsaved forms.
 Enter keeps the current value and `-` clears an optional field. Run
 `termicast faq` to read this FAQ without creating or opening a database.
 
+## How do I back out of a field I did not mean to open?
+
+At any prompt asking for a value, **Esc** or **Ctrl-C** cancels the field and
+returns to the menu you came from. The record you were editing is left exactly
+as it was: a cancelled field keeps its old value, a cancelled podroll, chapter,
+or soundbite entry is not added, and cancelling while creating a podcast or
+adding an episode abandons that record without saving anything. Ctrl-C only
+quits Termicast from a menu, not from a field; use **X** to exit.
+
+## Why are my imported episode files named with a long random string?
+
+An imported feed's assets are downloaded under a name derived from a hash of
+their original URL, such as `audio/a3f9c2…e81.mp3`, because nothing in the
+source feed is guaranteed to be a safe, unique file name. When you import, you
+can instead choose sequential names: **ep001** or **s01ep001**. Episodes the
+feed leaves unnumbered are numbered by publication date, oldest first, or left
+alone. The names are applied before anything is published, so nothing is live
+under the old name.
+
+## Can I rename an episode's files afterwards?
+
+Yes. Open the episode from **Episodes** and choose **Rename files**. Termicast
+moves the audio, artwork, and transcript, rewrites the feed, and regenerates the
+chapter JSON under the new name. Save or cancel any other edits first, because a
+rename is written immediately rather than when you press Save.
+
+Three things to know:
+
+- Renaming a **published** episode changes its public media URL. Apps and
+  directories that cached the old URL will get 404s; copies already downloaded
+  keep working. Termicast warns and asks for confirmation.
+- On **S3** hosting without *Keep a local copy of media*, the local file is
+  deleted after upload, so there is nothing left to rename. Enable that setting,
+  or restore from a `backup --include-media` archive, first. The old S3 objects
+  are never deleted, and the new names are not public until the next deploy.
+- If the process is interrupted mid-rename, **Check And Repair** reports any
+  file the feed references but cannot find.
+
 ## Where is my data stored?
 
 The default database is `~/.local/share/termicast/termicast.db`. Set
