@@ -1,4 +1,5 @@
 import os
+from unittest.mock import Mock
 
 import pytest
 
@@ -183,3 +184,26 @@ def test_create_or_import_declines_resume_clears_checkpoint_and_starts_fresh(mon
     with pytest.raises(Stop):
         cli._create_or_import(db, object(), importing=True)
     assert cli._load_resume(db) is None
+
+
+def test_finish_import_deploys_s3_when_auto_deploy_is_off(db):
+    cli._save_resume(db, new_show(output_dir="/srv/show"), False)
+    show = new_show(id="001", hosting="s3", bucket="b", enabled=False)
+    publisher = Mock()
+    cli._finish_import(publisher, db, show, "")
+    publisher.deploy.assert_called_once_with("001")
+    assert cli._load_resume(db) is None
+
+
+def test_finish_import_skips_deploy_when_auto_deploy_already_ran(db):
+    show = new_show(id="001", hosting="s3", bucket="b", enabled=True)
+    publisher = Mock()
+    cli._finish_import(publisher, db, show, "")
+    publisher.deploy.assert_not_called()
+
+
+def test_finish_import_skips_deploy_for_local_hosting(db):
+    show = new_show(id="001", hosting="local")
+    publisher = Mock()
+    cli._finish_import(publisher, db, show, "")
+    publisher.deploy.assert_not_called()

@@ -389,6 +389,24 @@ def _clear_resume(db):
     _resume_path(db).unlink(missing_ok=True)
 
 
+def _finish_import(publisher, db, show, source):
+    """Clear the resume checkpoint and, for S3 hosting, guarantee an upload.
+
+    `enabled` only gates *automatic* deploys on future publishes/schedules;
+    a fresh import already has media sitting locally that needs to reach the
+    bucket once, so this deploys it regardless of that setting. Without this,
+    "Podcast saved and feed generated" can print with nothing actually
+    uploaded and no error to say so, if `enabled` happened to be off.
+    """
+    _clear_resume(db)
+    if show.get("hosting") == "s3" and not show.get("enabled"):
+        console.print("Uploading imported media to S3 (this always runs once after import, "
+                      "regardless of 'Automatically deploy on publish/schedule?')...", markup=False)
+        publisher.deploy(show["id"])
+        console.print("Uploaded to S3.", style=ACCENT)
+    console.print(migration_guidance(show, source), markup=False)
+
+
 def _create_or_import(db, publisher, importing=False):
     source = ""
     template = None
@@ -468,8 +486,7 @@ def _create_or_import(db, publisher, importing=False):
     publisher.regenerate(show["id"])
     console.print("Podcast saved and feed generated.", style=ACCENT)
     if importing:
-        _clear_resume(db)
-        console.print(migration_guidance(show, source), markup=False)
+        _finish_import(publisher, db, show, source)
 
 
 def _interactive(db, publisher):

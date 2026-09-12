@@ -202,8 +202,11 @@ Hosting is configured under **Hosting** in the show menu:
   (e.g. `https://my-bucket.us-east-1.linodeobjects.com/my-show`). The feed
   references those asset URLs. Credentials live outside Termicast in
   `~/.s3cfg`; set the endpoint, bucket, prefix, and asset base URL in Termicast.
-  `enabled` controls automatic deployment on publish/schedule; `deploy` works
-  with valid configuration even when it is disabled.
+  `enabled` controls automatic deployment on future publish/schedule actions;
+  `deploy` works with valid configuration even when it is disabled. Importing
+  into S3 hosting always deploys once at the end regardless of `enabled` --
+  otherwise a fresh import with auto-deploy off would report success with
+  every asset still sitting local-only and no error to say so.
 
 If `~/.s3cfg` doesn't exist yet (and no `S3_ACCESS_KEY`/`S3_SECRET_KEY` env
 vars are set), Termicast offers to write it for you: the access/secret key

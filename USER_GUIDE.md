@@ -321,13 +321,20 @@ files. You'll set two addresses:
 > needs, or a checklist for other providers. You can also pull that policy
 > up any time from **Hosting → S3 write-access policy**.
 
-When setting up S3, you'll also be asked: **"Keep a local copy of media after
-it's uploaded to S3?"**
+When setting up S3, you'll also be asked **"Automatically deploy on
+publish/schedule?"** and **"Keep a local copy of media after it's uploaded to
+S3?"**
 
-- **No** (default): once your audio and artwork are in the bucket, the local
-  copies are removed. Only `feed.xml` stays on your server.
-- **Yes**: Termicast keeps a copy on your server too, for redundancy and
-  backup purposes.
+- **Automatically deploy** controls *future* episodes — say **No** if you'd
+  rather review and run `deploy` yourself each time. It has no effect on an
+  import already in progress: importing into S3 hosting always uploads once
+  at the end, regardless of this setting, so you never end up with an
+  "imported" podcast whose media never actually reached the bucket.
+- **Keep a local copy**:
+  - **No** (default): once your audio and artwork are in the bucket, the
+    local copies are removed. Only `feed.xml` stays on your server.
+  - **Yes**: Termicast keeps a copy on your server too, for redundancy and
+    backup purposes.
 
 ---
 
