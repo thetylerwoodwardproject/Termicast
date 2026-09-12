@@ -192,7 +192,7 @@ database and outputs, regenerate, and verify with `validate` and `doctor`.
 
 ## Planned additions
 
-We're planning optional tools to help prepare podcast episodes:
+I'm planning optional tools to help prepare podcast episodes:
 
 - **Assisted writing:** Generate editable titles and descriptions using
   Claude, OpenAI, or self-hosted Ollama models, guided by your preferred
