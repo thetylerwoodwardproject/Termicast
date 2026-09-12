@@ -88,6 +88,9 @@ class Database:
             raise ValueError("; ".join(errors))
         show["output_dir"] = str(Path(show["output_dir"]).expanduser().resolve())
         with self.lock(), self.connection() as conn:
+            if not show.get("id"):
+                numbers = [int(row[0]) for row in conn.execute("SELECT id FROM shows") if row[0].isdigit()]
+                show["id"] = f"{max(numbers, default=0) + 1:03d}"
             previous = conn.execute("SELECT settings FROM shows WHERE id = ?", (show["id"],)).fetchone()
             if previous and json.loads(previous[0])["guid"] != show["guid"]:
                 raise ValueError("A podcast GUID cannot change after creation")
@@ -102,6 +105,7 @@ class Database:
             for episode in episodes or []:
                 conn.execute("INSERT INTO episodes VALUES (?, ?, ?, ?, 'published')",
                              (episode["guid"], show["id"], json.dumps(episode), episode["published_at"]))
+        return show
 
     def forget_show(self, show_id):
         with self.lock(), self.connection() as conn:

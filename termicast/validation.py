@@ -157,9 +157,11 @@ def validate_show(show) -> list[str]:
         base = urlsplit(show["base_url"])
         if base.query or base.fragment:
             errors.append("base_url must not contain a query string or fragment")
-    for field in ("id", "guid"):
-        if not _uuid(show.get(field)):
-            errors.append(f"{field} must be a UUID")
+    if not _uuid(show.get("guid")):
+        errors.append("guid must be a UUID")
+    show_id = show.get("id", "")
+    if show_id and (not isinstance(show_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", show_id)):
+        errors.append("id must contain only letters, numbers, hyphens, or underscores")
     if show.get("podcast_type") not in ("episodic", "serial"):
         errors.append("podcast_type must be episodic or serial")
     try:

@@ -30,8 +30,7 @@ def show(db, tmp_path):
         base_url="https://example.org/show", output_dir=str(tmp_path / "output"),
         timezone="UTC", explicit=False,
     )
-    db.save_show(record)
-    return record
+    return db.save_show(record)
 
 
 def make_wav(path, seconds=0.2, channels=2, rate=44100):

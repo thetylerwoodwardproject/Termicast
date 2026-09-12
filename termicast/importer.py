@@ -3,7 +3,7 @@
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, uuid5
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -59,7 +59,7 @@ def _extract_show(root, source):
     owner = channel.find(_tag("itunes:owner"))
     roll = channel.find(_tag("podcast:podroll"))
     return {
-        "id": str(uuid4()),
+        "id": "",
         "guid": text("podcast:guid") or str(uuid5(NAMESPACE_URL, source or feed_url)),
         "title": text("title"), "description": text("description"),
         "author": text("itunes:author"),

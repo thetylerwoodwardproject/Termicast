@@ -51,7 +51,7 @@ def test_doctor_aggregates_and_unknown_show():
 
 def test_doctor_calls_checks(monkeypatch):
     db = Mock()
-    show = new_show(title="S", base_url="https://e.org/s", output_dir="/tmp/x")
+    show = new_show(id="001", title="S", base_url="https://e.org/s", output_dir="/tmp/x")
     db.get_show.return_value = show
     db.list_episodes.return_value = []
     monkeypatch.setattr(hosting, "check_tools", lambda s: ["tool problem"])

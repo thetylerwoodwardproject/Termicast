@@ -289,7 +289,7 @@ def _create_or_import(db, publisher, importing=False):
         show = show_form(new_show(), collect=True)
         if show is None:
             return
-    db.save_show(show, template=template, episodes=episodes)
+    show = db.save_show(show, template=template, episodes=episodes)
     publisher.regenerate(show["id"])
     console.print("Podcast saved and feed generated.", style=ACCENT)
     if importing:

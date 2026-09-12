@@ -64,7 +64,7 @@ def new_show(**kwargs) -> dict:
         "copyright", "artwork_url", "category", "subcategory", "secondary_category",
         "funding_url", "funding_label", "output_dir", "base_url", "asset_base_url",
     ), "")
-    show.update(id=str(uuid4()), locked=False, explicit=False, language="en",
+    show.update(id="", locked=False, explicit=False, language="en",
                 podcast_type="episodic", timezone="UTC", podroll=[],
                 hosting="local", endpoint_url="", bucket="", prefix="",
                 enabled=False, keep_local_media=False, op3=False,
