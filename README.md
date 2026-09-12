@@ -183,6 +183,15 @@ a `manifest.json`. `termicast restage <manifest> <base-url>` previews the URL
 rewriting and validates the result without installing. The archive can be
 re-imported later without downloading the catalog again.
 
+## Podcast metrics (OP3)
+
+Enable **OP3 podcast metrics** under **Edit field** in the settings review to
+prefix each episode's enclosure URL with `https://op3.dev/e/` and collect open
+download analytics. The stored media URL is unchanged; the prefix is applied
+only when the feed is generated. Importing a feed that already uses OP3
+(enclosure URLs starting with `https://op3.dev/e/`) enables it automatically;
+turn it off to serve unprefixed URLs.
+
 ## Backup and restore
 
 `termicast backup` produces a private (`0600`) ZIP of saved state, feeds, and
