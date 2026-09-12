@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from lxml import etree
 
 from termicast.publisher import Publisher
@@ -107,3 +108,172 @@ def test_s3_disabled_skips_auto_deploy(db, show, monkeypatch):
     Publisher(db).publish(show["id"], make_episode())
     assert calls == []
     assert db.list_episodes(show["id"])[0]["status"] == "published"
+
+
+def test_s3_publish_mirrors_feed_when_enabled(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    _write_local_audio(show)
+    calls = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: calls.append(list(paths)) or list(paths))
+    Publisher(db).publish(show["id"], make_episode())
+    assert calls == [["audio/e1.mp3"], ["feed.xml"]]
+    assert (Path(show["output_dir"]) / "feed.xml").is_file()
+
+
+def test_s3_publish_mirrors_fresh_feed_bytes(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    _write_local_audio(show)
+    stale = Path(show["output_dir"]) / "feed.xml"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"<stale/>")
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
+    episode = make_episode()
+    Publisher(db).publish(show["id"], episode)
+    content = stale.read_bytes()
+    assert b"<stale/>" not in content
+    assert episode["guid"].encode() in content
+
+
+def test_s3_mirror_retains_feed_when_media_not_kept(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, mirror_feed=True)
+    db.save_show(show)
+    audio = _write_local_audio(show)
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
+    Publisher(db).publish(show["id"], make_episode())
+    assert (Path(show["output_dir"]) / "feed.xml").is_file()
+    assert not audio.exists()
+
+
+def test_s3_disabled_blocks_automatic_mirror(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    _write_local_audio(show)
+    calls = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: calls.append(a))
+    Publisher(db).publish(show["id"], make_episode())
+    assert calls == []
+
+
+def test_local_hosting_never_mirrors(db, show, monkeypatch):
+    show = dict(show, hosting="local", mirror_feed=True)
+    db.save_show(show)
+    calls = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: calls.append(a))
+    Publisher(db).publish(show["id"], make_episode())
+    assert calls == []
+
+
+def test_s3_media_failure_prevents_mirror(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    _write_local_audio(show)
+    from termicast import s3deploy
+
+    def fail(s, paths, dry_run=False, verify=True):
+        if paths == ["feed.xml"]:
+            raise AssertionError("mirror must not run after media failure")
+        raise RuntimeError("media boom")
+    monkeypatch.setattr(s3deploy, "deploy_paths", fail)
+    with pytest.raises(RuntimeError, match="publish-due"):
+        Publisher(db).publish(show["id"], make_episode())
+    assert db.list_episodes(show["id"])[0]["status"] == "scheduled"
+
+
+def test_s3_mirror_failure_keeps_feed_and_dirty_state(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    _write_local_audio(show)
+    episode = make_episode()
+    from termicast import s3deploy
+
+    def fail_mirror(s, paths, dry_run=False, verify=True):
+        if paths == ["feed.xml"]:
+            raise RuntimeError("mirror boom")
+        return list(paths)
+    monkeypatch.setattr(s3deploy, "deploy_paths", fail_mirror)
+    with pytest.raises(RuntimeError, match="publish-due"):
+        Publisher(db).publish(show["id"], episode)
+    feed = Path(show["output_dir"]) / "feed.xml"
+    assert feed.is_file()
+    assert episode["guid"].encode() in feed.read_bytes()
+    with db.connection() as conn:
+        dirty = conn.execute("SELECT dirty FROM shows WHERE id=?", (show["id"],)).fetchone()[0]
+    assert dirty == 1
+
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
+    Publisher(db).publish_due()
+    assert db.list_episodes(show["id"])[0]["status"] == "published"
+    with db.connection() as conn:
+        dirty = conn.execute("SELECT dirty FROM shows WHERE id=?", (show["id"],)).fetchone()[0]
+    assert dirty == 0
+
+
+def test_s3_deploy_mirrors_feed_after_media(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    calls = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: calls.append(list(paths)) or list(paths))
+    result = Publisher(db).deploy(show["id"], verify=False)
+    assert calls == [["audio/e1.mp3"], ["feed.xml"]]
+    assert result == ["audio/e1.mp3", "feed.xml"]
+
+
+def test_s3_deploy_missing_feed_fails_before_media(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                mirror_feed=True)
+    db.save_show(show)
+    calls = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: calls.append(a))
+    with pytest.raises(ValueError, match="No local feed.xml"):
+        Publisher(db).deploy(show["id"], verify=False)
+    assert calls == []
+
+
+def test_s3_deploy_dry_run_has_no_side_effects(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    calls = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: calls.append((list(paths), dry_run, verify)) or list(paths))
+    Publisher(db).deploy(show["id"], dry_run=True)
+    assert all(dry_run for _, dry_run, _ in calls)
+    assert (Path(show["output_dir"]) / "audio" / "e1.mp3").exists()
+    assert (Path(show["output_dir"]) / "feed.xml").is_file()
+
+
+def test_s3_deploy_no_verify_suppresses_checks(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    verifies = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: verifies.append(verify) or list(paths))
+    Publisher(db).deploy(show["id"], verify=False)
+    assert verifies == [False, False]

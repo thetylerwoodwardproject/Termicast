@@ -267,8 +267,11 @@ also works for archive imports and converts only the staged copy.
 
 One thing stays the same no matter what: **your feed file (`feed.xml`) always
 stays on your own web server.** It's written to the show's output folder and
-served from your base URL. Only the big media files (audio, artwork,
-transcripts, chapters) can optionally move to cloud storage.
+served from your base URL — the local copy is the canonical one. Only the big
+media files (audio, artwork, transcripts, chapters) can optionally move to
+cloud storage. If you'd like, S3 hosting can also mirror a copy of `feed.xml`
+into the bucket, but the web-server copy remains the one listeners are pointed
+at.
 
 Under **4. Hosting** in your show's menu:
 
@@ -322,8 +325,8 @@ files. You'll set two addresses:
 > up any time from **Hosting → S3 write-access policy**.
 
 When setting up S3, you'll also be asked **"Automatically deploy on
-publish/schedule?"** and **"Keep a local copy of media after it's uploaded to
-S3?"**
+publish/schedule?"**, **"Keep a local copy of media after it's uploaded to
+S3?"**, and **"Also upload a copy of feed.xml to the bucket?"**
 
 - **Automatically deploy** controls *future* episodes — say **No** if you'd
   rather review and run `deploy` yourself each time. It has no effect on an
@@ -335,6 +338,18 @@ S3?"**
     local copies are removed. Only `feed.xml` stays on your server.
   - **Yes**: Termicast keeps a copy on your server too, for redundancy and
     backup purposes.
+- **Mirror feed.xml**: say **Yes** to also upload a copy of the freshly
+  written `feed.xml` to the bucket (uploaded after the media). `feed.xml`
+  still stays on your web server either way — turning this off later simply
+  stops updating the mirrored copy; it never deletes the existing one.
+
+> [!TIP]
+> If `doctor` or a deploy prints a flood of near-identical "Content-Type"
+> errors, Termicast collapses them into a few examples and tells you the fix.
+> For URLs served by your web server, use **Hosting → Nginx/Apache MIME
+> snippet** and reload the server. For S3/CDN URLs the upload already set the
+> Content-Type, so check the object metadata and any CDN/proxy header
+> overrides or cached headers instead.
 
 ---
 

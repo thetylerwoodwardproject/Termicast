@@ -146,7 +146,8 @@ and keep-original options are available in review and via CLI flags.
 Arrange publicly readable HTTPS hosting for the feed, chapters, MP3s, artwork, and
 transcripts. **Your feed (`feed.xml`) always stays on your web server**, in the
 show's output directory, served from `base_url/feed.xml`. Only the media assets
-can move off the web server.
+can move off the web server — though with S3 hosting you can also mirror a copy
+of `feed.xml` into the bucket while the web-server copy stays canonical.
 
 Termicast supports **local web server** (feed and media all served directly from
 the output directory) or **S3-compatible storage** (media uploaded with `s4cmd`,

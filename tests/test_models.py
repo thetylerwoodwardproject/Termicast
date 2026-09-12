@@ -56,6 +56,8 @@ def test_show_defaults():
     assert show["audio_preset"] == "standard"
     assert show["image_preset"] == "compact"
     assert show["enabled"] is False
+    assert show["keep_local_media"] is False
+    assert show["mirror_feed"] is False
 
 
 def test_episode_has_fresh_guid_and_slug_fields():

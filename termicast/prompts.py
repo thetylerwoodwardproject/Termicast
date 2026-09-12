@@ -116,7 +116,7 @@ SHOW_ESSENTIALS = (
     "explicit", "timezone", "category", "output_dir", "base_url",
 )
 
-S3_SETTINGS = ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media")
+S3_SETTINGS = ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")
 
 EXPORT_NOTICE = (
     "Smaller files help listeners on slower connections and reduce hosting bandwidth. "
@@ -692,6 +692,9 @@ def hosting_form(data):
         staged["keep_local_media"] = confirm(
             "Keep a local copy of media after it's uploaded to S3 (for redundancy and media-inclusive backups)?",
             bool(staged.get("keep_local_media", False)))
+        staged["mirror_feed"] = confirm(
+            "Also upload a copy of feed.xml to the bucket (it still stays on your web server too)?",
+            bool(staged.get("mirror_feed", False)))
     else:
         for field in S3_SETTINGS:
             staged.pop(field, None)
@@ -1076,8 +1079,9 @@ def hosting_menu(db, publisher, show):
             elif action == 4:
                 problems = doctor(db, show["id"])
                 if problems:
-                    for problem in problems:
-                        warning(problem)
+                    from .hosting import summarize_verification_problems
+                    for line in summarize_verification_problems(problems, target="mixed"):
+                        warning(line)
                 else:
                     console.print("No hosting problems found.", style=ACCENT)
             elif action == 5:

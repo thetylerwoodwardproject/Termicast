@@ -152,9 +152,10 @@ def _permission_help(show, message):
 def deploy_paths(show, relative_paths, source_root=None, *, dry_run=False, verify=True):
     """Upload and verify a batch of managed assets in the given order.
 
-    `relative_paths` is the explicit set of managed asset files to deploy
-    (never `feed.xml`, which stays on the web server). A failed upload stops
-    the batch and raises. Returns the list of uploaded relative paths.
+    `relative_paths` is the explicit set of managed asset files to deploy.
+    `feed.xml` is normally excluded (it stays on the web server) and is only
+    uploaded when explicitly requested as a mirror. A failed upload stops the
+    batch and raises. Returns the list of uploaded relative paths.
     """
     if not relative_paths:
         return []
@@ -175,7 +176,8 @@ def deploy_paths(show, relative_paths, source_root=None, *, dry_run=False, verif
         for relative in uploaded:
             problems.extend(check_url(f"{base}/{relative}", content_type_for(relative)))
     if problems:
-        raise RuntimeError("; ".join(problems))
+        from .hosting import summarize_verification_problems
+        raise RuntimeError("\n".join(summarize_verification_problems(problems, target="s3")))
     return uploaded
 
 

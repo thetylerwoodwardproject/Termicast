@@ -88,6 +88,18 @@ def upload_existing_assets(show, relative_paths, dry_run=False, verify=True):
     return uploaded
 
 
+def mirror_feed(show, *, dry_run=False, verify=True):
+    """Upload/verify the freshly written canonical feed.xml to S3.
+
+    Unlike `upload_existing_assets`, this never deletes the local file: the
+    feed is the canonical, always-local copy. It goes through `deploy_paths`
+    so the mirror reuses ordered uploads, public MIME verification, and
+    dry-run handling consistently with the rest of a deploy.
+    """
+    from .s3deploy import deploy_paths
+    return deploy_paths(show, ["feed.xml"], dry_run=dry_run, verify=verify)
+
+
 class Publisher:
     def __init__(self, db):
         self.db = db
@@ -201,8 +213,12 @@ class Publisher:
         return count
 
     def deploy(self, show_id, dry_run=False, verify=True):
-        """Standalone deploy: upload saved assets (S3) and verify. `feed.xml`
-        always stays on the web server and is never uploaded."""
+        """Standalone deploy: upload saved assets (S3) and verify.
+
+        `feed.xml` stays on the web server as the canonical copy; when the
+        show's `mirror_feed` setting is on, a copy is additionally uploaded to
+        the bucket after the media assets succeed.
+        """
         show = self.db.get_show(show_id)
         if show is None:
             raise ValueError("Unknown podcast ID")
@@ -214,7 +230,12 @@ class Publisher:
             for episode in episodes:
                 assets |= episode_asset_paths(episode)
             if show.get("hosting") == "s3":
-                return upload_existing_assets(show, sorted(assets), dry_run=dry_run, verify=verify)
+                if show.get("mirror_feed") and not (asset_root(show) / "feed.xml").is_file():
+                    raise ValueError("No local feed.xml to deploy; publish or regenerate first")
+                uploaded = upload_existing_assets(show, sorted(assets), dry_run=dry_run, verify=verify)
+                if show.get("mirror_feed"):
+                    uploaded = list(uploaded) + list(mirror_feed(show, dry_run=dry_run, verify=verify))
+                return uploaded
             feed = asset_root(show) / "feed.xml"
             if not feed.is_file():
                 raise ValueError("No local feed.xml to deploy; publish or regenerate first")
@@ -225,7 +246,8 @@ class Publisher:
                 for relative in sorted(assets):
                     problems.extend(check_url(asset_base(show) + "/" + relative, content_type_for(relative)))
                 if problems:
-                    raise RuntimeError("; ".join(problems))
+                    from .hosting import summarize_verification_problems
+                    raise RuntimeError("\n".join(summarize_verification_problems(problems, target="local")))
             return sorted(assets | {"feed.xml"})
 
     def _snapshot(self, show_id, now, include_due, release_guids):
@@ -261,6 +283,14 @@ class Publisher:
                 self._deploy_remote(snapshot, show)
             with output_lock(show):
                 atomic_write(Path(show["output_dir"]) / "feed.xml", snapshot["data"])
+            if show.get("hosting") == "s3" and show.get("enabled") and show.get("mirror_feed"):
+                try:
+                    mirror_feed(show)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Local feed.xml and media are published, but mirroring feed.xml to S3 "
+                        f"failed: {exc}. Retry with: termicast publish-due (it retries every "
+                        f"dirty or due show).") from exc
             with self.db.lock():
                 with self.db.connection() as conn:
                     conn.executemany("UPDATE episodes SET status='published' WHERE show_id=? AND guid=?",
@@ -291,4 +321,6 @@ class Publisher:
         except Exception as exc:
             raise RuntimeError(
                 f"Saved locally. Remote publication failed: {exc}. "
-                f"Retry with: termicast deploy {show['id']}") from exc
+                f"Retry with: termicast publish-due (it retries every dirty or due show, not "
+                f"just this one); use termicast deploy {show['id']} for a standalone upload "
+                f"retry after the feed has already been regenerated.") from exc

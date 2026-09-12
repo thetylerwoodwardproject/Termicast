@@ -188,9 +188,11 @@ output directories):
 ## 🌐 Hosting
 
 Each show has an output directory and a public HTTPS **base URL**. The feed file
-`feed.xml` **always stays on your web server**: it is written to the output
-directory and served from `base_url/feed.xml`. Only the media assets (audio,
-artwork, transcripts, chapters) can optionally move to object storage.
+`feed.xml` is written to the output directory and served from `base_url/feed.xml`
+-- it always stays on your web server as the canonical copy. The media assets
+(audio, artwork, transcripts, chapters) can optionally move to object storage,
+and with S3 hosting you can additionally opt to mirror a copy of `feed.xml` into
+the bucket while the web-server copy remains canonical.
 
 Hosting is configured under **Hosting** in the show menu:
 
@@ -206,7 +208,10 @@ Hosting is configured under **Hosting** in the show menu:
   `deploy` works with valid configuration even when it is disabled. Importing
   into S3 hosting always deploys once at the end regardless of `enabled` --
   otherwise a fresh import with auto-deploy off would report success with
-  every asset still sitting local-only and no error to say so.
+  every asset still sitting local-only and no error to say so. With
+  **Mirror feed.xml to S3** (`mirror_feed`) on, a copy of the freshly written
+  `feed.xml` is also uploaded to the bucket — after the media assets — during
+  automatic and standalone deploys; the local `feed.xml` is never deleted.
 
 If `~/.s3cfg` doesn't exist yet (and no `S3_ACCESS_KEY`/`S3_SECRET_KEY` env
 vars are set), Termicast offers to write it for you: the access/secret key
@@ -254,6 +259,18 @@ deletes remote objects automatically.
 `doctor` is read-only and checks tools, public feed/media accessibility, MIME
 types, and local-versus-remote feed content. `deploy --dry-run` performs no
 uploads or bucket probes.
+
+When verification finds Content-Type problems, Termicast caps the repeated
+diagnostics to a handful of samples (with an exact omitted count) and points at
+the right fix for the failing URL's host: the Nginx/Apache MIME snippets for
+web-server URLs, or object-metadata/CDN-override guidance for S3 URLs. HTTP,
+unreachable, and upload errors are always shown in full and must be resolved
+before the response headers are treated as a MIME problem.
+
+A failed automatic publication is recoverable: the show is left `dirty`, and
+`termicast publish-due` retries it (along with every other dirty or due show).
+Use `termicast deploy <id>` for a standalone upload retry once the feed has
+already been regenerated, or after a failed end-of-import upload.
 
 ### 🌍 Multiple podcasts on S3
 

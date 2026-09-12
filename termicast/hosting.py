@@ -57,6 +57,70 @@ def check_url(url, expected_content_type=None) -> list[str]:
     return problems
 
 
+_MIME_MARKERS = ("Unexpected Content-Type ", "Missing Content-Type ")
+
+_MIME_GUIDANCE = {
+    "local": (
+        "Content-Type mismatches usually mean the web server is serving the wrong MIME "
+        "types. Apply the fix from Termicast → Open podcast → Hosting → Nginx MIME snippet "
+        "(or Apache MIME snippet) to the server/location block that serves the failing URL, "
+        "then reload the server."
+    ),
+    "s3": (
+        "Uploads already set Content-Type, so these usually mean stale object metadata, a "
+        "CDN/proxy header override, or a cached response. Inspect the object metadata and any "
+        "CDN/proxy overrides for the failing URL. The Nginx/Apache MIME snippets only apply if "
+        "such a server actually serves or proxies that URL; retrying alone won't repair "
+        "unchanged object metadata because uploads skip unchanged objects (--sync-check)."
+    ),
+    "mixed": (
+        "If the failing URL is served by your web server, apply the fix from Termicast → Open "
+        "podcast → Hosting → Nginx MIME snippet (or Apache MIME snippet) and reload the server. "
+        "If it is an S3/CDN URL, uploads already set Content-Type: inspect object metadata and "
+        "any CDN/proxy overrides or cached headers for that URL instead."
+    ),
+}
+
+_OTHER_ERRORS_FIRST = (
+    "Resolve the HTTP/unreachable/upload errors above first: a missing or forbidden URL, or "
+    "an HTML error page, must be fixed before its response headers can be treated as a MIME "
+    "configuration problem."
+)
+
+
+def summarize_verification_problems(problems, limit=5, *, target="mixed"):
+    """Cap MIME diagnostics, retain other failures, and append relevant guidance.
+
+    `target` is 'local', 's3', or 'mixed'; `limit` is a nonnegative integer.
+    Returns presentation lines without mutating the input.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+        raise ValueError("limit must be a nonnegative integer")
+    if target not in ("local", "s3", "mixed"):
+        raise ValueError("target must be 'local', 's3', or 'mixed'")
+    if not problems:
+        return []
+    mime = []
+    other = []
+    for problem in problems:
+        if isinstance(problem, str) and any(marker in problem for marker in _MIME_MARKERS):
+            mime.append(problem)
+        else:
+            other.append(problem)
+    lines = list(other)
+    if not mime:
+        return lines
+    shown = mime[:limit]
+    omitted = len(mime) - len(shown)
+    lines.extend(shown)
+    if omitted > 0:
+        lines.append(f"... {omitted} more Content-Type problems omitted ...")
+    if other:
+        lines.append(_OTHER_ERRORS_FIRST)
+    lines.append(_MIME_GUIDANCE[target])
+    return lines
+
+
 def check_tools(show) -> list[str]:
     problems = []
     for tool in ("ffmpeg", "ffprobe"):

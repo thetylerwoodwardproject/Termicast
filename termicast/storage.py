@@ -72,6 +72,8 @@ def validate_storage(show):
         errors.append("enabled must be a boolean")
     if "keep_local_media" in show and not isinstance(show["keep_local_media"], bool):
         errors.append("keep_local_media must be a boolean")
+    if "mirror_feed" in show and not isinstance(show["mirror_feed"], bool):
+        errors.append("mirror_feed must be a boolean")
     return errors
 
 

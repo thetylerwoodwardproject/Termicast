@@ -49,9 +49,31 @@ def test_hosting_form_invalid_settings_leave_settings_untouched(monkeypatch):
 def test_hosting_form_drops_stale_s3_settings_when_switching_to_local(monkeypatch):
     monkeypatch.setattr(prompts, "menu", lambda *a, **k: 1)  # Local web server
     data = {"hosting": "s3", "bucket": "old-bucket", "prefix": "old", "enabled": True,
-            "output_dir": "/srv/show"}
+            "mirror_feed": True, "output_dir": "/srv/show"}
     prompts.hosting_form(data)
     assert data == {"hosting": "local", "output_dir": "/srv/show"}
+
+
+def test_hosting_form_asks_mirror_feed_for_s3(monkeypatch):
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: 2)  # S3-compatible storage
+
+    def fake_text(label, current="", required=False, **kwargs):
+        if label == "Bucket name":
+            return "b"
+        if "asset" in label.lower():
+            return "https://cdn.e.org/show"
+        return current or ""
+
+    monkeypatch.setattr(prompts, "text", fake_text)
+    confirmed = []
+    monkeypatch.setattr(prompts, "confirm",
+                        lambda label, default=False: confirmed.append(label) or False)
+    monkeypatch.setattr(prompts, "_ensure_s3_credentials", lambda: None)
+    data = {"hosting": "local", "output_dir": "/srv/show"}
+    prompts.hosting_form(data)
+    assert any("feed.xml" in label for label in confirmed)
+    assert data["mirror_feed"] is False
+    assert data["hosting"] == "s3"
 
 
 def test_show_form_cancel_abandons_creation(cancel_text, monkeypatch):

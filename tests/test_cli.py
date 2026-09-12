@@ -1,3 +1,4 @@
+import json
 import os
 from unittest.mock import Mock
 
@@ -136,10 +137,11 @@ def test_load_resume_returns_none_without_a_checkpoint(db):
 
 def test_save_and_load_resume_round_trip(db):
     destination = new_show(output_dir="/srv/show", hosting="s3", bucket="b")
-    cli._save_resume(db, destination, True)
-    loaded_destination, loaded_overwrite = cli._load_resume(db)
+    cli._save_resume(db, destination, True, "hosting")
+    loaded_destination, loaded_overwrite, loaded_progress = cli._load_resume(db)
     assert loaded_destination == destination
     assert loaded_overwrite is True
+    assert loaded_progress == "hosting"
 
 
 def test_clear_resume_is_a_noop_without_a_checkpoint(db):
@@ -153,14 +155,33 @@ def test_load_resume_ignores_a_corrupt_checkpoint(db):
     assert cli._load_resume(db) is None
 
 
+def test_load_resume_ignores_malformed_envelopes(db):
+    path = cli._resume_path(db)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    malformed = (
+        "[]",
+        "{}",
+        '{"destination": "not-a-dict", "overwrite": true}',
+        '{"destination": {}, "overwrite": "yes"}',
+        '{"destination": {}, "overwrite": true, "progress": "bogus"}',
+    )
+    for raw in malformed:
+        path.write_text(raw)
+        assert cli._load_resume(db) is None
+
+
 def test_create_or_import_resumes_saved_setup_and_skips_pickup(monkeypatch, db):
     saved = new_show(output_dir="/srv/show", base_url="https://example.org/show", hosting="local")
-    cli._save_resume(db, saved, False)
+    cli._save_resume(db, saved, False, "hosting")
     monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
 
     def fail_pick(destination):
         raise AssertionError("should not re-prompt for output_dir when resuming")
     monkeypatch.setattr(cli, "_pick_output_dir", fail_pick)
+
+    def fail_hosting(destination):
+        raise AssertionError("should not re-configure hosting when resuming")
+    monkeypatch.setattr(cli, "_configure_hosting", fail_hosting)
 
     class Stop(Exception):
         pass
@@ -172,7 +193,7 @@ def test_create_or_import_resumes_saved_setup_and_skips_pickup(monkeypatch, db):
 
 def test_create_or_import_declines_resume_clears_checkpoint_and_starts_fresh(monkeypatch, db):
     saved = new_show(output_dir="/srv/show", base_url="https://example.org/show", hosting="local")
-    cli._save_resume(db, saved, False)
+    cli._save_resume(db, saved, False, "hosting")
     monkeypatch.setattr(cli, "confirm", lambda *a, **k: False)
 
     class Stop(Exception):
@@ -186,8 +207,78 @@ def test_create_or_import_declines_resume_clears_checkpoint_and_starts_fresh(mon
     assert cli._load_resume(db) is None
 
 
+def test_resume_after_output_selection_reasks_base_url_and_hosting(monkeypatch, db):
+    saved = new_show(output_dir="/srv/show")
+    cli._save_resume(db, saved, False, "output")
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+    steps = []
+    monkeypatch.setattr(cli, "edit_field", lambda data, field: steps.append(field))
+    monkeypatch.setattr(cli, "_configure_hosting", lambda data: steps.append("hosting"))
+
+    class Stop(Exception):
+        pass
+    monkeypatch.setattr(cli, "menu", lambda *a, **k: (_ for _ in ()).throw(Stop()))
+    with pytest.raises(Stop):
+        cli._create_or_import(db, object(), importing=True)
+    assert "base_url" in steps
+    assert "hosting" in steps
+
+
+def test_resume_after_base_url_only_reasks_hosting(monkeypatch, db):
+    saved = new_show(output_dir="/srv/show", base_url="https://example.org/show")
+    cli._save_resume(db, saved, False, "base_url")
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+    steps = []
+    monkeypatch.setattr(cli, "edit_field", lambda data, field: steps.append(field))
+    monkeypatch.setattr(cli, "_configure_hosting", lambda data: steps.append("hosting"))
+
+    class Stop(Exception):
+        pass
+    monkeypatch.setattr(cli, "menu", lambda *a, **k: (_ for _ in ()).throw(Stop()))
+    with pytest.raises(Stop):
+        cli._create_or_import(db, object(), importing=True)
+    assert steps == ["hosting"]
+
+
+def test_resume_legacy_checkpoint_reasks_base_url_and_hosting(monkeypatch, db):
+    saved = new_show(output_dir="/srv/show", base_url="https://example.org/show", hosting="local")
+    path = cli._resume_path(db)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"destination": saved, "overwrite": False}))
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+    steps = []
+    monkeypatch.setattr(cli, "edit_field", lambda data, field: steps.append(field))
+    monkeypatch.setattr(cli, "_configure_hosting", lambda data: steps.append("hosting"))
+
+    def fail_pick(destination):
+        raise AssertionError("should not re-prompt for output_dir for a legacy checkpoint")
+    monkeypatch.setattr(cli, "_pick_output_dir", fail_pick)
+
+    class Stop(Exception):
+        pass
+    monkeypatch.setattr(cli, "menu", lambda *a, **k: (_ for _ in ()).throw(Stop()))
+    with pytest.raises(Stop):
+        cli._create_or_import(db, object(), importing=True)
+    assert steps == ["base_url", "hosting"]
+
+
+def test_failed_s3_check_keeps_checkpoint_at_base_url(monkeypatch, db):
+    from termicast.prompts import Cancelled
+    saved = new_show(output_dir="/srv/show", base_url="https://example.org/show")
+    cli._save_resume(db, saved, False, "base_url")
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+
+    def fail_hosting(data):
+        raise Cancelled()
+    monkeypatch.setattr(cli, "_configure_hosting", fail_hosting)
+    with pytest.raises(Cancelled):
+        cli._create_or_import(db, object(), importing=True)
+    _, _, progress = cli._load_resume(db)
+    assert progress == "base_url"
+
+
 def test_finish_import_deploys_s3_when_auto_deploy_is_off(db):
-    cli._save_resume(db, new_show(output_dir="/srv/show"), False)
+    cli._save_resume(db, new_show(output_dir="/srv/show"), False, "hosting")
     show = new_show(id="001", hosting="s3", bucket="b", enabled=False)
     publisher = Mock()
     cli._finish_import(publisher, db, show, "")
@@ -207,3 +298,46 @@ def test_finish_import_skips_deploy_for_local_hosting(db):
     publisher = Mock()
     cli._finish_import(publisher, db, show, "")
     publisher.deploy.assert_not_called()
+
+
+def test_finish_import_failure_does_not_print_success(db, capsys):
+    cli._save_resume(db, new_show(output_dir="/srv/show"), False, "hosting")
+    show = new_show(id="001", hosting="s3", bucket="b", enabled=False)
+    publisher = Mock()
+    publisher.deploy.side_effect = RuntimeError("boom")
+    cli._finish_import(publisher, db, show, "")
+    out = capsys.readouterr().out
+    assert "Podcast saved and feed generated." not in out
+    assert "termicast deploy 001" in out
+    assert cli._load_resume(db) is None
+
+
+def test_finish_import_prints_success_after_upload(db, capsys):
+    cli._save_resume(db, new_show(output_dir="/srv/show"), False, "hosting")
+    show = new_show(id="001", hosting="s3", bucket="b", enabled=False)
+    publisher = Mock()
+    cli._finish_import(publisher, db, show, "")
+    out = capsys.readouterr().out
+    assert "Podcast saved and feed generated." in out
+
+
+def test_hosting_banner_prints_before_regeneration(monkeypatch, db, capsys):
+    show = new_show(
+        title="S", description="d", base_url="https://example.org/show",
+        output_dir="/tmp/termicast-banner", hosting="s3", bucket="b", prefix="p",
+        asset_base_url="https://cdn.example.org/show", enabled=True, mirror_feed=True,
+    )
+    monkeypatch.setattr(cli, "show_form", lambda *a, **k: show)
+    calls = []
+    publisher = Mock()
+
+    def regenerate(show_id):
+        calls.append("regenerate")
+        raise RuntimeError("boom")
+    publisher.regenerate = regenerate
+    with pytest.raises(RuntimeError):
+        cli._create_or_import(db, publisher, importing=False)
+    out = capsys.readouterr().out
+    assert "Hosting: S3-compatible storage." in out
+    assert "Mirror feed.xml to S3: on" in out
+    assert calls == ["regenerate"]

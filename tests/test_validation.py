@@ -34,6 +34,26 @@ def test_s3_storage_requires_asset_base_url():
     assert validate_storage(show) == []
 
 
+def test_mirror_feed_non_boolean_rejected():
+    show = new_show(title="S", description="d", base_url="https://e.org/show",
+                    output_dir="/tmp/x", hosting="s3", bucket="b",
+                    asset_base_url="https://cdn.e.org/show", mirror_feed="yes")
+    assert any("mirror_feed" in e for e in validate_storage(show))
+
+
+def test_keep_local_media_non_boolean_rejected():
+    show = new_show(title="S", description="d", base_url="https://e.org/show",
+                    output_dir="/tmp/x", keep_local_media="yes")
+    assert any("keep_local_media" in e for e in validate_storage(show))
+
+
+def test_mirror_feed_boolean_accepted():
+    show = new_show(title="S", description="d", base_url="https://e.org/show",
+                    output_dir="/tmp/x", hosting="s3", bucket="b",
+                    asset_base_url="https://cdn.e.org/show", mirror_feed=True)
+    assert validate_storage(show) == []
+
+
 def test_asset_base_uses_asset_base_url_for_s3():
     from termicast.storage import asset_base
     show = new_show(base_url="https://e.org/show", asset_base_url="https://cdn.e.org/show", hosting="s3")

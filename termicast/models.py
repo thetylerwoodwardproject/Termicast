@@ -143,7 +143,7 @@ def new_show(**kwargs) -> dict:
     show.update(id="", locked=False, explicit=False, language="en",
                 podcast_type="episodic", timezone="UTC", podroll=[],
                 hosting="local", endpoint_url="", bucket="", prefix="",
-                enabled=False, keep_local_media=False, op3=False,
+                enabled=False, keep_local_media=False, mirror_feed=False, op3=False,
                 audio_preset="standard", image_preset="compact")
     show.update(kwargs)
     if "guid" not in kwargs:

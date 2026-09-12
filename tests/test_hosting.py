@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 
+import pytest
+
 from termicast import hosting
 from termicast.models import new_show
 
@@ -82,3 +84,90 @@ def test_doctor_calls_checks(monkeypatch):
     assert any("tool problem" in p for p in problems)
     assert any("feed problem" in p for p in problems)
     assert any("asset problem" in p for p in problems)
+
+
+def test_summarize_caps_mime_errors_with_count():
+    problems = [f"Unexpected Content-Type 'text/html' (expected text/vtt): https://e.org/x{i}"
+                for i in range(44)]
+    lines = hosting.summarize_verification_problems(problems, target="local")
+    assert len([l for l in lines if "Unexpected Content-Type" in l]) == 5
+    assert any("39 more Content-Type problems omitted" in l for l in lines)
+    assert any("Nginx MIME snippet" in l for l in lines)
+
+
+def test_summarize_preserves_non_mime_order_and_details():
+    problems = [
+        "Unreachable: https://e.org/a",
+        "Unexpected Content-Type 'text/html' (expected text/vtt): https://e.org/b",
+        "HTTP 500: https://e.org/c",
+    ]
+    lines = hosting.summarize_verification_problems(problems, target="local")
+    assert lines[0] == "Unreachable: https://e.org/a"
+    assert lines[1] == "HTTP 500: https://e.org/c"
+    assert lines[2].startswith("Unexpected Content-Type")
+    assert any("must be fixed before" in l for l in lines)
+
+
+def test_summarize_missing_content_type_is_mime():
+    problems = ["Missing Content-Type (expected text/vtt): https://e.org/x"]
+    lines = hosting.summarize_verification_problems(problems, target="local")
+    assert any("Missing Content-Type" in l for l in lines)
+
+
+def test_summarize_recognizes_show_prefixed_mime():
+    problems = ["My Show (001): Unexpected Content-Type 'text/html' (expected text/vtt): https://e.org/x"]
+    lines = hosting.summarize_verification_problems(problems, target="mixed")
+    assert any("Unexpected Content-Type" in l for l in lines)
+
+
+def test_summarize_treats_no_content_type_mapping_as_non_mime():
+    problems = ["feed.xml: No Content-Type mapping for feed.xml; use a supported format"]
+    lines = hosting.summarize_verification_problems(problems, target="s3")
+    assert lines == problems
+    assert not any("Nginx MIME snippet" in l for l in lines)
+    assert not any("Uploads already set Content-Type" in l for l in lines)
+
+
+def test_summarize_preserves_duplicate_counts():
+    problems = ["Unexpected Content-Type 'text/html' (expected text/vtt): https://e.org/x"] * 10
+    lines = hosting.summarize_verification_problems(problems, limit=3, target="local")
+    assert any("7 more Content-Type problems omitted" in l for l in lines)
+
+
+def test_summarize_empty_and_zero_limit():
+    assert hosting.summarize_verification_problems([]) == []
+    problems = ["Unexpected Content-Type 'text/html' (expected text/vtt): https://e.org/x"] * 3
+    lines = hosting.summarize_verification_problems(problems, limit=0, target="local")
+    assert all("Unexpected Content-Type" not in l for l in lines)
+    assert any("3 more Content-Type problems omitted" in l for l in lines)
+
+
+def test_summarize_rejects_negative_limit():
+    with pytest.raises(ValueError):
+        hosting.summarize_verification_problems([], limit=-1)
+
+
+def test_summarize_rejects_bad_target():
+    with pytest.raises(ValueError):
+        hosting.summarize_verification_problems([], target="bogus")
+
+
+def test_summarize_s3_target_guidance():
+    problems = ["Unexpected Content-Type 'text/html' (expected audio/mpeg): https://cdn.e.org/x.mp3"]
+    lines = hosting.summarize_verification_problems(problems, target="s3")
+    assert any("Uploads already set Content-Type" in l for l in lines)
+    assert not any("Nginx MIME snippet" in l for l in lines)
+
+
+def test_summarize_mixed_target_guidance():
+    problems = ["Missing Content-Type (expected text/vtt): https://e.org/x"]
+    lines = hosting.summarize_verification_problems(problems, target="mixed")
+    assert any("Nginx MIME snippet" in l for l in lines)
+    assert any("already set Content-Type" in l for l in lines)
+
+
+def test_summarize_does_not_mutate_input():
+    problems = ["Unexpected Content-Type 'text/html': https://e.org/x"]
+    original = list(problems)
+    hosting.summarize_verification_problems(problems, target="local")
+    assert problems == original

@@ -366,23 +366,41 @@ def _resume_path(db):
 
 
 def _load_resume(db):
-    """Return a saved (destination, overwrite) pair from an interrupted import setup, or None.
+    """Return a saved (destination, overwrite, progress) triple from an interrupted
+    import setup, or None.
 
     Only the output directory, base URL, and hosting/S3 destination fields are
     saved -- never credentials, and nothing from the import source or episode
     review that follows. That covers the setup steps that are actually
     expensive to retype (up to eight prompts) when, say, an S3 permission
     check fails and the whole import aborts.
+
+    `progress` names the last completed setup step ("output", "base_url", or
+    "hosting"), or is None for a checkpoint written by an older version that
+    tracked no progress. Malformed JSON-shaped data is treated like invalid
+    JSON: ignored rather than crashing on `.get()` or unpacking.
     """
     try:
         data = json.loads(_resume_path(db).read_text())
-        return data["destination"], data["overwrite"]
-    except (OSError, KeyError, ValueError):
+    except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
+    destination = data.get("destination")
+    overwrite = data.get("overwrite")
+    progress = data.get("progress")
+    if not isinstance(destination, dict):
+        return None
+    if not isinstance(overwrite, bool):
+        return None
+    if progress is not None and progress not in ("output", "base_url", "hosting"):
+        return None
+    return destination, overwrite, progress
 
 
-def _save_resume(db, destination, overwrite):
-    atomic_write(_resume_path(db), json.dumps({"destination": destination, "overwrite": overwrite}, indent=2).encode())
+def _save_resume(db, destination, overwrite, progress):
+    atomic_write(_resume_path(db), json.dumps(
+        {"destination": destination, "overwrite": overwrite, "progress": progress}, indent=2).encode())
 
 
 def _clear_resume(db):
@@ -397,13 +415,25 @@ def _finish_import(publisher, db, show, source):
     bucket once, so this deploys it regardless of that setting. Without this,
     "Podcast saved and feed generated" can print with nothing actually
     uploaded and no error to say so, if `enabled` happened to be off.
+
+    Prints the final import-success message only after that one-time upload
+    succeeds; if it fails, the show and feed are reported as saved locally
+    with `termicast deploy <id>` as the retry command.
     """
     _clear_resume(db)
     if show.get("hosting") == "s3" and not show.get("enabled"):
         console.print("Uploading imported media to S3 (this always runs once after import, "
                       "regardless of 'Automatically deploy on publish/schedule?')...", markup=False)
-        publisher.deploy(show["id"])
+        try:
+            publisher.deploy(show["id"])
+        except Exception as exc:
+            error(f"Saved locally, but the final upload failed: {exc}")
+            console.print(f"The show and feed were saved locally. Retry the upload with: "
+                          f"termicast deploy {show['id']}", markup=False)
+            console.print(migration_guidance(show, source), markup=False)
+            return
         console.print("Uploaded to S3.", style=ACCENT)
+    console.print("Podcast saved and feed generated.", style=ACCENT)
     console.print(migration_guidance(show, source), markup=False)
 
 
@@ -414,27 +444,55 @@ def _create_or_import(db, publisher, importing=False):
     if importing:
         destination = new_show()
         overwrite = False
+        next_step = "output"
         resumed = _load_resume(db)
         if resumed is not None:
-            saved_destination, saved_overwrite = resumed
-            hosting_label = "S3-compatible storage" if saved_destination.get("hosting") == "s3" else "Local web server"
-            console.print(f"Found an incomplete import setup: output dir "
-                          f"{saved_destination.get('output_dir') or '(not set)'}, hosting: {hosting_label}.",
-                          markup=False)
+            saved_destination, saved_overwrite, saved_progress = resumed
+            hosting_label = ("S3-compatible storage" if saved_destination.get("hosting") == "s3"
+                             else "Local web server")
+            if saved_progress is None:
+                console.print(
+                    f"Found a saved import setup from an older version: output dir "
+                    f"{saved_destination.get('output_dir') or '(not set)'}. Its base URL and "
+                    f"hosting were not confirmed, so those will be re-asked.", markup=False)
+            elif saved_progress == "output":
+                console.print(
+                    f"Found an incomplete import setup: output dir "
+                    f"{saved_destination.get('output_dir') or '(not set)'} is set; the base URL "
+                    f"and hosting are next.", markup=False)
+            elif saved_progress == "base_url":
+                console.print(
+                    f"Found an incomplete import setup: output dir "
+                    f"{saved_destination.get('output_dir') or '(not set)'} and base URL are set; "
+                    f"hosting is next.", markup=False)
+            else:
+                console.print(
+                    f"Found a saved import setup: output dir "
+                    f"{saved_destination.get('output_dir') or '(not set)'}, hosting: "
+                    f"{hosting_label}. Import source is next.", markup=False)
             if confirm("Resume this setup instead of starting over?", True):
                 destination, overwrite = saved_destination, saved_overwrite
+                if saved_progress is None or saved_progress == "output":
+                    next_step = "base_url"
+                elif saved_progress == "base_url":
+                    next_step = "hosting"
+                else:
+                    next_step = "done"
             else:
                 _clear_resume(db)
-        if destination.get("output_dir"):
-            console.print("Using the saved output dir and hosting settings. Import source is next.", markup=False)
-        else:
+        if next_step == "output":
             console.print("Choose the feed directory and its public HTTPS directory URL. Existing website directories are allowed. Hosting is configured next.", markup=False)
             overwrite = _pick_output_dir(destination)
-            _save_resume(db, destination, overwrite)
+            _save_resume(db, destination, overwrite, "output")
+            next_step = "base_url"
+        if next_step == "base_url":
             edit_field(destination, "base_url")
-            _save_resume(db, destination, overwrite)
+            _save_resume(db, destination, overwrite, "base_url")
+            next_step = "hosting"
+        if next_step == "hosting":
             _configure_hosting(destination)
-            _save_resume(db, destination, overwrite)
+            _save_resume(db, destination, overwrite, "hosting")
+            next_step = "done"
         kind = menu("Import source", ["Feed (HTTPS URL or local XML)", "Archive manifest (local files)"], 1)
         if kind == 2:
             manifest = text("Archive manifest path (manifest.json)", required=True)
@@ -445,7 +503,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media")})
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")})
             show = show_form(show)
             if show is None:
                 return
@@ -466,7 +524,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media")})
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")})
             show = show_form(show)
             if show is None:
                 return
@@ -483,10 +541,19 @@ def _create_or_import(db, publisher, importing=False):
         if show is None:
             return
     show = db.save_show(show, template=template, episodes=episodes)
+    hosting_label = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
+    console.print(f"Hosting: {hosting_label}.", style=ACCENT, markup=False)
+    if show.get("hosting") == "s3":
+        bucket = show.get("bucket", "")
+        prefix = show.get("prefix", "")
+        console.print(f"  Bucket: {f'{bucket}/{prefix}' if prefix else bucket}", markup=False)
+        console.print(f"  Automatic deployment: {'on' if show.get('enabled') else 'off'}", markup=False)
+        console.print(f"  Mirror feed.xml to S3: {'on' if show.get('mirror_feed') else 'off'}", markup=False)
     publisher.regenerate(show["id"])
-    console.print("Podcast saved and feed generated.", style=ACCENT)
     if importing:
         _finish_import(publisher, db, show, source)
+    else:
+        console.print("Podcast saved and feed generated.", style=ACCENT)
 
 
 def _interactive(db, publisher):
@@ -584,7 +651,7 @@ def main(argv=None):
     add.add_argument("--image-preset", choices=("compact", "detail"), help="Override the show's image preset.")
     add.add_argument("--keep-audio", action="store_true", help="Keep the original audio instead of optimizing.")
     add.add_argument("--keep-image", action="store_true", help="Keep the original artwork instead of optimizing.")
-    deploy = commands.add_parser("deploy", help="Upload saved media assets to S3 (feed.xml stays on the web server); verify by default.")
+    deploy = commands.add_parser("deploy", help="Upload saved media assets to S3; verify by default. With 'Mirror feed.xml to S3' enabled, also uploads a copy of feed.xml.")
     deploy.add_argument("show_id")
     deploy.add_argument("--dry-run", action="store_true", help="No uploads or bucket probes.")
     deploy.add_argument("--no-verify", action="store_true", help="Skip post-deploy public verification.")
@@ -624,10 +691,11 @@ def main(argv=None):
         if args.command == "validate":
             return _validate(db, args.show_id)
         if args.command == "doctor":
+            from .hosting import summarize_verification_problems
             problems = doctor(db, args.show_id)
             if problems:
-                for problem in problems:
-                    warning(problem)
+                for line in summarize_verification_problems(problems, target="mixed"):
+                    warning(line)
                 return 1
             console.print("No hosting problems found.", style=ACCENT)
             return 0
