@@ -172,6 +172,32 @@ deletes remote objects automatically.
 types, and local-versus-remote feed content. `deploy --dry-run` performs no
 uploads or bucket probes.
 
+### Multiple podcasts on S3
+
+Hosting settings are stored **per show**: `endpoint_url`, `bucket`, `prefix`,
+and `asset_base_url` all live on the show record, and `deploy` reads them from
+whichever show it is deploying. Several podcasts can therefore publish to
+different buckets at the same time. Two shows may also share one bucket under
+separate prefixes; overlapping prefixes are rejected when the show is saved.
+
+Credentials are the exception. `s4cmd` reads a single `~/.s3cfg` — and only its
+`access_key` and `secret_key` (`host_base` is ignored, since Termicast passes
+the endpoint explicitly per show). Every show therefore deploys with the same
+key pair. What that allows, and what it does not:
+
+| Setup | Supported |
+| --- | --- |
+| Several buckets in one account | Yes |
+| Several buckets in different regions of one account | Yes — give each show its explicit regional endpoint |
+| One bucket shared by several shows under distinct prefixes | Yes |
+| Two shows in different **accounts** on one provider | No — would need different keys |
+| One show on AWS and another on a different provider | No — would need different keys |
+
+For the multi-region case, set each show's endpoint explicitly (for example
+`https://s3.us-west-2.amazonaws.com`) rather than leaving it blank. A blank
+endpoint means the AWS region is resolved from ambient configuration
+(`AWS_REGION`, `~/.aws/config`), which is shared by every show.
+
 ### S3 public access and caching
 
 Configure the bucket (or CDN) so objects under the show prefix are publicly
