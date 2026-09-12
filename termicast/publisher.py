@@ -14,7 +14,7 @@ import tempfile
 from .database import filesystem_lock
 from .feed import render_feed
 from .validation import validate_episode
-from .models import chapter_filename, chapters_relative, transcript_relative
+from .models import chapters_relative, transcript_relative
 from .storage import asset_root, asset_base
 
 

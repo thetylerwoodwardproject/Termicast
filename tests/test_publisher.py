@@ -5,7 +5,6 @@ from lxml import etree
 
 from termicast.publisher import Publisher
 from termicast.models import new_episode
-from termicast.feed import _tag, NS
 
 
 def make_episode(**kwargs):

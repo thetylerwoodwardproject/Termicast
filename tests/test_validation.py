@@ -1,5 +1,5 @@
 from termicast.models import new_show, new_episode
-from termicast.validation import validate_show, validate_episode, validate_presets
+from termicast.validation import validate_show, validate_episode
 from termicast.storage import validate_storage, validate_conflicting_prefixes
 
 
@@ -55,6 +55,20 @@ def test_conflicting_prefixes_rejected():
     b = new_show(hosting="s3", bucket="b", prefix="show/extra", endpoint_url="https://s3.e.org")
     try:
         validate_conflicting_prefixes([a, b])
+        assert False, "expected conflict"
+    except ValueError as exc:
+        assert "conflict" in str(exc)
+
+
+def test_save_show_rejects_conflicting_s3_prefix(db, tmp_path):
+    def s3_show(prefix, output_dir):
+        return new_show(title="S", description="d", base_url="https://e.org/show",
+                        output_dir=str(output_dir), hosting="s3", bucket="b", prefix=prefix,
+                        endpoint_url="https://s3.e.org", asset_base_url="https://s3.e.org/b")
+
+    db.save_show(s3_show("show", tmp_path / "a"))
+    try:
+        db.save_show(s3_show("show/extra", tmp_path / "b"))
         assert False, "expected conflict"
     except ValueError as exc:
         assert "conflict" in str(exc)

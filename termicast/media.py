@@ -323,7 +323,7 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
     if keep:
         if fmt not in ("JPEG", "PNG"):
             raise ValueError("Keep image requires JPEG or PNG artwork")
-        ext = ".jpg" if suffix == ".jpeg" else (".jpg" if suffix == ".jpg" else ".png")
+        ext = ".jpg" if suffix in (".jpg", ".jpeg") else ".png"
         dest = dest_dir / (slug + ext)
         temp = dest_dir / f".{dest.name}.tmp-{os.getpid()}"
         try:

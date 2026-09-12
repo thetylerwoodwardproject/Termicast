@@ -5,6 +5,7 @@ from datetime import datetime
 import io
 import json
 from pathlib import Path
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .models import new_episode
@@ -70,7 +71,7 @@ def import_csv(db, show_id, path, review_titles=None):
                     matches = [e for e in existing.values() if e["mp3_url"] == row.get("mp3_url", "")]
                     if len(matches) > 1:
                         raise ValueError("Ambiguous MP3 URL; supply an explicit GUID")
-                    guid = matches[0]["guid"] if matches else new_episode()["guid"]
+                    guid = matches[0]["guid"] if matches else str(uuid4())
                 old = existing.get(guid)
                 episode = dict(old) if old else new_episode(guid=guid)
                 for key, value in row.items():

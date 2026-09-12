@@ -5,7 +5,6 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from datetime import datetime, timezone
-from copy import deepcopy
 from email.utils import parsedate_to_datetime
 import hashlib
 import json
@@ -21,13 +20,6 @@ from . import validation
 def _https(url):
     if not validation.validate_https(url):
         raise ValueError("Feed URL must be HTTPS without credentials")
-    try:
-        parts = urlsplit(url)
-        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
-            raise ValueError
-        parts.port
-    except ValueError as exc:
-        raise ValueError("Feed URL must be HTTPS without credentials") from exc
     return url
 
 

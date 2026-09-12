@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import math
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from rich.console import Console

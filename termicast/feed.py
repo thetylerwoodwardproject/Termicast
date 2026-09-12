@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from lxml import etree
-from .models import chapter_filename, chapters_relative
+from .models import chapters_relative
 from .media import ENCLOSURE_TYPES
 from .storage import asset_base
 

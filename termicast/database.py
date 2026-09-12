@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 
+from .storage import validate_conflicting_prefixes
 from .validation import validate_show
 
 
@@ -90,6 +91,9 @@ class Database:
             previous = conn.execute("SELECT settings FROM shows WHERE id = ?", (show["id"],)).fetchone()
             if previous and json.loads(previous[0])["guid"] != show["guid"]:
                 raise ValueError("A podcast GUID cannot change after creation")
+            others = [json.loads(row[0]) for row in conn.execute(
+                "SELECT settings FROM shows WHERE id != ?", (show["id"],))]
+            validate_conflicting_prefixes(others + [show])
             conn.execute("""
                 INSERT INTO shows(id, settings, output_dir, template) VALUES (?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET settings=excluded.settings,

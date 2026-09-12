@@ -6,7 +6,6 @@ bucket writes or deletes. Public verification is shared with S3 deployment.
 """
 
 import shutil
-from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
@@ -23,7 +22,7 @@ def _head_or_range(url, expected_content_type=None):
         body = b""
         response.close()
         return status, content_type, body
-    except HTTPError as exc:
+    except HTTPError:
         # Some servers reject HEAD; fall back to a 1-byte ranged GET.
         try:
             response = validation._open(url)
