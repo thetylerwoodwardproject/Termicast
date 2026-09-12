@@ -5,8 +5,9 @@
 
 Termicast is a Linux terminal application for managing multiple podcasts and
 generating static RSS feeds, chapter files, and prepared media. It uses numbered
-menus, Rich messages, SQLite state, namespace-aware XML handling, FFmpeg/Pillow
-media preparation, and `s4cmd` for S3-compatible deployment.
+menus with arrow-key navigation ([Questionary](https://github.com/tmbo/questionary)),
+Rich messages, SQLite state, namespace-aware XML handling, FFmpeg/Pillow media
+preparation, and `s4cmd` for S3-compatible deployment.
 
 Termicast combines episode publishing, podcast migration, and media preparation
 into one CLI. Add episodes from local media files, schedule them, and deploy

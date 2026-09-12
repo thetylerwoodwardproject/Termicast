@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 import math
 from zoneinfo import ZoneInfo
 
+import questionary
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+from prompt_toolkit.keys import Keys
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -24,6 +28,15 @@ ACCENT = "#39ff14"
 WAVEFORM = "▁▂▃▅▇█▇▅▃▂▁"
 console = Console()
 _backup_action = ContextVar("termicast_backup_action", default=None)
+
+MENU_STYLE = questionary.Style([
+    ("qmark", f"fg:{ACCENT}"),
+    ("answer", f"fg:{ACCENT}"),
+    ("pointer", f"fg:{ACCENT}"),
+    ("highlighted", f"fg:{ACCENT} bold"),
+    ("selected", "noreverse"),
+    ("separator", f"fg:{ACCENT} bold"),
+])
 
 
 def show_banner():
@@ -115,30 +128,129 @@ def warning(message):
     console.print(str(message), style="yellow", markup=False)
 
 
+class _Jump:
+    """Sentinel: the digit buffer changed; rebuild the widget in place."""
+
+    __slots__ = ("digits",)
+
+    def __init__(self, digits):
+        self.digits = digits
+
+
+class _Action:
+    """Sentinel: a hotkey (backup/FAQ) fired; run its side effect and redraw."""
+
+    __slots__ = ("action",)
+
+    def __init__(self, action):
+        self.action = action
+
+
+def _menu_key_bindings(digits, num_choices):
+    """Key bindings for numeric jump-select plus hotkeys, exit, and interrupts."""
+    bindings = KeyBindings()
+
+    def jump(event, new_digits):
+        event.app.exit(result=_Jump(new_digits))
+
+    for digit in "0123456789":
+        def handler(event, digit=digit):
+            candidate = int(digits + digit)
+            if candidate < 1 or candidate > num_choices:
+                return
+            jump(event, digits + digit)
+        bindings.add(digit, eager=True)(handler)
+
+    @bindings.add(Keys.Backspace, eager=True)
+    def _backspace(event):
+        if digits:
+            jump(event, digits[:-1])
+
+    @bindings.add(Keys.Escape, eager=True)
+    def _escape(event):
+        if digits:
+            jump(event, "")
+
+    @bindings.add("b", eager=True)
+    @bindings.add("B", eager=True)
+    def _backup(event):
+        event.app.exit(result=_Action("b"))
+
+    @bindings.add("f", eager=True)
+    @bindings.add("F", eager=True)
+    def _faq(event):
+        event.app.exit(result=_Action("f"))
+
+    @bindings.add("x", eager=True)
+    @bindings.add("X", eager=True)
+    def _exit(event):
+        event.app.exit(exception=ExitRequested())
+
+    @bindings.add(Keys.ControlC, eager=True)
+    def _interrupt(event):
+        event.app.exit(exception=KeyboardInterrupt())
+
+    @bindings.add(Keys.ControlD, eager=True)
+    def _eof(event):
+        event.app.exit(exception=EOFError())
+
+    return bindings
+
+
 def menu(title, options, default=None, headers=None):
     """Return a one-based selection. EOF and interrupts propagate to the CLI.
 
     `headers` optionally maps a 0-based option index to a section label
-    printed (unselectable) immediately before that option, for grouping
+    rendered (unselectable) immediately before that option, for grouping
     otherwise-flat option lists without changing their numbering.
     """
     headers = headers or {}
+    num_choices = len(options)
+
+    def print_header():
+        console.print(Panel(Text("Use ↑/↓ and Enter, or type a number."),
+                            title=Text(str(title)), title_align="left",
+                            border_style=ACCENT))
+        console.print("  B. Backup saved data    F. FAQ    X. Exit", style=ACCENT)
+
+    digits = ""
+    redraw = True
     while True:
-        lines = []
+        if redraw:
+            print_header()
+            redraw = False
+
+        choices = []
         for index, option in enumerate(options):
             if index in headers:
-                lines.append(Text(str(headers[index]), style=f"bold {ACCENT}"))
-            lines.append(Text(f"  {index + 1}. {option}"))
-        console.print(Panel(Text("\n").join(lines), title=Text(str(title)),
-                            title_align="left", border_style=ACCENT))
-        console.print("  B. Backup saved data    F. FAQ    X. Exit", style=ACCENT)
-        answer = console.input("[" + ACCENT + "]Choice[/]" +
-                               (f" [{default}]" if default is not None else "") + ": ").strip()
-        if answer.lower() == "x":
-            raise ExitRequested()
-        if answer.lower() in ("b", "f"):
+                choices.append(questionary.Separator(str(headers[index])))
+            choices.append(questionary.Choice(title=f"{index + 1}. {option}",
+                                              value=index + 1))
+
+        current_default = int(digits) if digits else default
+        question = questionary.select(
+            "",
+            choices,
+            default=current_default,
+            qmark="",
+            instruction=" ",
+            style=MENU_STYLE,
+            use_arrow_keys=True,
+            use_jk_keys=False,
+            use_emacs_keys=False,
+            erase_when_done=True,
+        )
+        question.application.key_bindings = merge_key_bindings(
+            [question.application.key_bindings, _menu_key_bindings(digits, num_choices)]
+        )
+        result = question.unsafe_ask()
+
+        if isinstance(result, _Jump):
+            digits = result.digits
+            continue
+        if isinstance(result, _Action):
             try:
-                if answer.lower() == "f":
+                if result.action == "f":
                     show_faq()
                 else:
                     action = _backup_action.get()
@@ -149,12 +261,11 @@ def menu(title, options, default=None, headers=None):
                 raise
             except Exception as exc:
                 error(f"Menu action failed: {exc}")
+            redraw = True
             continue
-        if not answer and default is not None:
-            return default
-        if answer.isdigit() and 1 <= int(answer) <= len(options):
-            return int(answer)
-        error(f"Enter a number from 1 to {len(options)}, B for backup, F for FAQ, or X to exit.")
+
+        console.print(Text(f"Choice: {result}. {options[result - 1]}"))
+        return result
 
 
 # Keys are prompt labels without parenthesized requirements, shared by forms
