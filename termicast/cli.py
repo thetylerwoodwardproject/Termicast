@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime
 import json
 import os
+import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from zipfile import ZipFile
@@ -655,6 +656,8 @@ def main(argv=None):
     deploy.add_argument("show_id")
     deploy.add_argument("--dry-run", action="store_true", help="No uploads or bucket probes.")
     deploy.add_argument("--no-verify", action="store_true", help="Skip post-deploy public verification.")
+    fix_mime = commands.add_parser("fix-host-mime", help="Guided Nginx/Apache site configuration edit, validation, and reload.")
+    fix_mime.add_argument("show_id")
     doctor_cmd = commands.add_parser("doctor", help="Read-only hosting and media checks.")
     doctor_cmd.add_argument("show_id", nargs="?", help="Podcast ID; omit to check all shows.")
     archive = commands.add_parser("archive", help="Download a feed and assets into a persistent archive.")
@@ -700,6 +703,14 @@ def main(argv=None):
             console.print("No hosting problems found.", style=ACCENT)
             return 0
         publisher = Publisher(db)
+        if args.command == "fix-host-mime":
+            show = db.get_show(args.show_id)
+            if show is None:
+                raise ValueError(f"Unknown podcast ID: {args.show_id}")
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                raise ValueError("Run fix-host-mime in an interactive terminal on the web-server host.")
+            from .prompts import correct_host_mime
+            return 0 if correct_host_mime(db, show) else 1
         if args.command == "add":
             show = db.get_show(args.show_id)
             if show is None:
@@ -710,7 +721,24 @@ def main(argv=None):
                         keep_audio=args.keep_audio, keep_image=args.keep_image)
             return 0
         if args.command == "deploy":
-            publisher.deploy(args.show_id, dry_run=args.dry_run, verify=not args.no_verify)
+            try:
+                publisher.deploy(args.show_id, dry_run=args.dry_run, verify=not args.no_verify)
+            except RuntimeError as exc:
+                if args.dry_run or args.no_verify or not any(
+                        marker in str(exc) for marker in ("Unexpected Content-Type ", "Missing Content-Type ")):
+                    raise
+                error(exc)
+                console.print(f"Open the guided host correction with: termicast fix-host-mime {args.show_id}", markup=False)
+                try:
+                    if sys.stdin.isatty() and sys.stdout.isatty() and confirm(
+                            "Check this host for Nginx/Apache and correct MIME settings now?", False):
+                        from .prompts import correct_host_mime
+                        correct_host_mime(db, db.get_show(args.show_id))
+                        console.print(f"Retry deployment to confirm completion: termicast deploy {args.show_id}", markup=False)
+                except (Cancelled, ExitRequested, EOFError):
+                    console.print("Correction cancelled; deployment verification failed.")
+                # A repair does not complete a partially failed deployment.
+                return 1
             console.print("Deployed." if not args.dry_run else "Dry run complete: no uploads or bucket probes were made.",
                           style=ACCENT)
             return 0

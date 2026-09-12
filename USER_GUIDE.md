@@ -287,12 +287,18 @@ Under **4. Hosting** in your show's menu:
 | **10. Correct host MIME types** | Detect local Nginx/Apache tools, edit a site configuration, validate, and optionally reload and recheck |
 
 When the interactive Hosting checks or Deploy action reports incorrect MIME types,
+including `termicast deploy <show-id>` in a terminal,
 Termicast offers **Correct host MIME types** directly. This is a guided repair:
 select the installed server and the active site configuration serving your podcast.
 Termicast displays the MIME mappings and opens `$VISUAL`, `$EDITOR`, or `vi` so you
 can apply them in the correct directory/location block. Scope chapter JSON mappings
 to `chapters/` when the site also serves ordinary JSON; preserve existing Nginx MIME
 mappings instead of adding a duplicate `types` block.
+
+To open the repair directly, run `termicast fix-host-mime <show-id>` on the
+web-server host in an interactive terminal. Rerun `termicast deploy <show-id>`
+afterwards: correcting server headers does not automatically finish a failed
+deployment. Unattended deployments print the command without prompting.
 
 The selected server's default configuration is tested before and after the edit.
 Termicast keeps a private backup outside server include directories, restores the

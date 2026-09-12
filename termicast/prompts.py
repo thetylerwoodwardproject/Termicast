@@ -1097,6 +1097,7 @@ def correct_host_mime(db, show):
             warning(line)
     else:
         console.print("Public hosting checks passed after reload.", style=ACCENT)
+        return True
 
 
 def hosting_menu(db, publisher, show):

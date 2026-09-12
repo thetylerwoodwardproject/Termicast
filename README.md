@@ -266,6 +266,11 @@ syntax, and offers a reload followed by public verification. Interactive Hosting
 checks and failed deployments also offer this flow when MIME mismatches occur.
 See `USER_GUIDE.md` for configuration scope and permissions.
 
+You can also run `termicast fix-host-mime <show-id>` directly on the web-server
+host. A command-line `deploy` that reports MIME errors offers this guided repair
+when run in an interactive terminal. It retains its failed exit status: after
+correcting the server, rerun `deploy` to complete and verify deployment.
+
 `doctor` is read-only and checks tools, public feed/media accessibility, MIME
 types, and local-versus-remote feed content. `deploy --dry-run` performs no
 uploads or bucket probes.
