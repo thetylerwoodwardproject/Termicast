@@ -1,4 +1,4 @@
-# Termicast
+# 📻 Termicast
 
 > [!TIP]
 > New here? Start with the **[User Guide](USER_GUIDE.md)** for a plain-English
@@ -16,7 +16,7 @@ either to a local web server or to S3-compatible object storage.
 
 ![Termicast broadcast console: the main menu with options to open, import, create, or forget a podcast](docs/screenshot.png)
 
-## Quickstart
+## 🚀 Quickstart
 
 ```sh
 sudo apt install python3 python3-venv ffmpeg
@@ -48,7 +48,7 @@ termicast add <show-id> episode.mp3 artwork.jpg transcript.vtt --slug s02ep042
 Audio is required; artwork and transcript are optional and identified by their
 file type. Media files must be on the machine running Termicast.
 
-## Commands
+## 🧭 Commands
 
 ```text
 termicast                                   interactive menus
@@ -68,14 +68,14 @@ termicast faq                               read the FAQ without a database
 `--data-dir` (before any subcommand) overrides the state directory, which
 defaults to `~/.local/share/termicast/`.
 
-## Episode workflow
+## 🎙️ Episode workflow
 
 `add` validates inputs (audio required, no ambiguous files), chooses or suggests
 an editorial slug, prepares media, shows filenames/settings/sizes, collects
 episode details, and publishes now or schedules. The menu **New episode** uses
 the same flow.
 
-### Presets
+### 🎚️ Presets
 
 | Audio preset | Output |
 | --- | --- |
@@ -93,7 +93,7 @@ are preserved; transparency is flattened onto white; oversize square covers are
 reduced to 3000x3000. Per-episode overrides: `--audio-preset`, `--image-preset`,
 `--keep-audio`, `--keep-image`.
 
-### Slugs and files
+### 🏷️ Slugs and files
 
 `--slug s02ep042` produces:
 
@@ -108,7 +108,7 @@ Extensions follow the actual output format. Slugs use ASCII letters, numbers,
 hyphens, and underscores, and must begin with a letter or number. Collisions
 with other episodes are rejected before install.
 
-## Scheduling and cron
+## ⏰ Scheduling and cron
 
 > [!WARNING]
 > A scheduled episode stays out of the feed until `publish-due` releases it.
@@ -138,7 +138,7 @@ output directories):
 > - `publish-due` also retries shows left "dirty" by a previously failed
 >   publication, so a transient error self-heals on the next tick.
 
-## Hosting
+## ☁️ Hosting
 
 Each show has an output directory and a public HTTPS **base URL**. The feed file
 `feed.xml` **always stays on your web server**: it is written to the output
@@ -176,7 +176,7 @@ deletes remote objects automatically.
 types, and local-versus-remote feed content. `deploy --dry-run` performs no
 uploads or bucket probes.
 
-### Multiple podcasts on S3
+### 🌍 Multiple podcasts on S3
 
 Hosting settings are stored **per show**: `endpoint_url`, `bucket`, `prefix`,
 and `asset_base_url` all live on the show record, and `deploy` reads them from
@@ -205,7 +205,7 @@ For the multi-region case, set each show's endpoint explicitly (for example
 endpoint means the AWS region is resolved from ambient configuration
 (`AWS_REGION`, `~/.aws/config`), which is shared by every show.
 
-### S3 public access and caching
+### 🔐 S3 public access and caching
 
 Configure the bucket (or CDN) so objects under the show prefix are publicly
 readable, and use the correct Content-Types (see the Hosting → Nginx MIME
@@ -216,7 +216,7 @@ that egress bandwidth is billed by most object stores; the media presets
 reduce size for listeners on slower connections and lower bandwidth costs.
 Termicast never sets object ACLs or modifies your web server.
 
-## Import and migration
+## 📦 Import and migration
 
 Import a feed (HTTPS URL or local XML) or a pre-archived manifest
 (`manifest.json` describing feed pages and staged assets). Identity (GUIDs,
@@ -232,7 +232,7 @@ a `manifest.json`. `termicast restage <manifest> <base-url>` previews the URL
 rewriting and validates the result without installing. The archive can be
 re-imported later without downloading the catalog again.
 
-## Podcast metrics (OP3)
+## 📈 Podcast metrics (OP3)
 
 Enable **OP3 podcast metrics** under **Edit field** in the settings review to
 prefix each episode's enclosure URL with `https://op3.dev/e/` and collect open
@@ -244,7 +244,7 @@ download analytics.
 > starting with `https://op3.dev/e/`) enables it automatically; turn it off to
 > serve unprefixed URLs.
 
-## Backup and restore
+## 💾 Backup and restore
 
 `termicast backup` produces a private (`0600`) ZIP of saved state, feeds, and
 chapters; `--include-media` also copies `audio/`, `images/`, and `transcripts/`.
@@ -253,7 +253,7 @@ chapters; `--include-media` also copies `audio/`, `images/`, and `transcripts/`.
 > Restore is manual: stop cron, extract into a private directory, restore the
 > database and outputs, regenerate, and verify with `validate` and `doctor`.
 
-## Planned additions
+## 🗺️ Planned additions
 
 I'm planning optional tools to help prepare podcast episodes:
 
@@ -275,9 +275,21 @@ combine local Whisper with Claude, OpenAI, or Ollama models such as
 These features will be optional, with generated content reviewed before
 publication. They are planned additions, with no committed release date.
 
-## Limits
+## 🚧 Limits
 
 Media probing and downloads are bounded (2 GiB default, configurable via
 `TERMICAST_MAX_MEDIA_BYTES`, `TERMICAST_DOWNLOAD_TIMEOUT`,
 `TERMICAST_STALL_TIMEOUT`). Artwork inspection is capped at 20 MiB. Feed XML is
 capped at 10 MiB. Validation is offline; use `doctor` for public checks.
+
+---
+
+Developed with the help of machines by **Tyler Woodward** of **The Tyler
+Woodward Project**.
+
+[![Website](https://img.shields.io/badge/Website-tylerwoodward.me-14b8a6?style=for-the-badge)](https://tylerwoodward.me)
+[![Threads](https://img.shields.io/badge/Threads-%40tylerwoodward.me-000000?style=for-the-badge&logo=threads&logoColor=white)](https://www.threads.net/@tylerwoodward.me)
+[![Instagram](https://img.shields.io/badge/Instagram-%40tylerwoodward.me-E4405F?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/tylerwoodward.me)
+[![Bluesky](https://img.shields.io/badge/Bluesky-tylerwoodward.me-0285FF?style=for-the-badge&logo=bluesky&logoColor=white)](https://bsky.app/profile/tylerwoodward.me)
+[![YouTube](https://img.shields.io/badge/YouTube-%40thetylerwoodwardproject-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@thetylerwoodwardproject)
+[![Facebook](https://img.shields.io/badge/Facebook-%2Fthetylerwoodwardproject-1877F2?style=for-the-badge&logo=facebook&logoColor=white)](https://www.facebook.com/thetylerwoodwardproject)
