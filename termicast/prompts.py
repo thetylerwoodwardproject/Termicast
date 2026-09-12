@@ -1054,6 +1054,7 @@ def edit_episode_form(db, show, publisher, saved):
 
 def correct_host_mime(db, show):
     """Guide an explicit local-server edit, syntax check, reload and verification."""
+    from urllib.parse import urlsplit
     from .serverfix import detect_servers, edit_site_config, reload_server
     from .hosting import nginx_snippet, apache_snippet, doctor, summarize_verification_problems
     servers = detect_servers()
@@ -1063,16 +1064,29 @@ def correct_host_mime(db, show):
         return
     names = list(servers)
     name = names[menu("Detected web-server tools", names) - 1]
+    domain = urlsplit(show["base_url"]).netloc
     console.print(f"Public feed: {show['base_url']}/feed.xml", markup=False)
     console.print(f"Local output directory: {show['output_dir']}", markup=False)
     if show.get("hosting") == "s3":
         warning("This local correction applies to the web-hosted feed. S3/CDN media may "
                 "need object metadata or CDN changes instead.")
-    console.print("Installed tools do not identify the server serving this URL. Select the "
-                  "active site configuration included by this server's default configuration. "
-                  "Termicast will open your VISUAL/EDITOR (or vi), back up the selected file, "
-                  "and restore it if editing or syntax validation fails. The current account "
-                  "needs permission to edit the file and control the server.", markup=False)
+    console.print("Termicast needs the path to the site configuration that serves this URL. "
+                  "Pick the file with the server block whose server_name/root match it, not "
+                  "the main nginx.conf. Common locations:", markup=False)
+    if name == "Nginx":
+        console.print("  Debian/Ubuntu:  /etc/nginx/sites-available/<domain>\n"
+                      "  RHEL/Fedora:    /etc/nginx/conf.d/<domain>.conf\n"
+                      f"Find it with:     sudo grep -R -n 'server_name {domain}' "
+                      "/etc/nginx/sites-enabled /etc/nginx/conf.d", markup=False)
+    else:
+        console.print("  Debian/Ubuntu:  /etc/apache2/sites-available/<domain>.conf\n"
+                      "  RHEL/Fedora:    /etc/httpd/conf.d/<domain>.conf\n"
+                      f"Find it with:     sudo grep -R -n '{domain}' "
+                      "/etc/apache2/sites-enabled /etc/httpd/conf.d", markup=False)
+    console.print("Termicast backs up the selected file, opens it in VISUAL/EDITOR (or vi), "
+                  "and restores it if editing or validation fails. The syntax check and reload "
+                  "run as root, so Termicast uses sudo when it is not already root and your "
+                  "account will be prompted for the sudo password.", markup=False)
     console.print(nginx_snippet(show) if name == "Nginx" else apache_snippet(show), markup=False)
     console.print("Apply these mappings only to the podcast directory/location. Restrict the "
                   "JSON mapping to chapters/ if other JSON is served there. For Nginx, merge "

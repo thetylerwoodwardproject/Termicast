@@ -235,7 +235,7 @@ Keep these diagnostics rather than suppressing them or relaxing the expected MIM
 - This is guided editing, not automatic configuration rewriting. Changes belong in the podcast's directory/location scope; restrict chapter JSON mappings to `chapters/` when ordinary JSON is served elsewhere.
 - Preserve existing Nginx MIME mappings and merge into an existing `types` block rather than adding a duplicate block. Avoid global changes affecting unrelated sites.
 - Only the selected configuration file is backed up and restored. The backup has owner-only permissions and is outside directories that could load it as active configuration. Temporary backups need copying elsewhere for long-term retention.
-- The current account needs file-editing and server-control permissions. The workflow does not invoke sudo.
+- The current account needs file-editing and server-control permissions. Validation and reload run as root (reading Let's Encrypt TLS keys and signalling the master), so the workflow uses `sudo` when not already root, and elevates the editor when the config file is not writable by the current account.
 - Validation and reload use the selected tool's default configuration. Custom instances and container-managed servers require their deployment tooling.
 - S3/CDN media may require object metadata or CDN header changes. A local-server edit does not establish a fix for those URLs; the canonical web-hosted feed can still use this workflow.
 - Command-line `doctor` remains read-only. No automatic edits or reloads are introduced into unattended publishing or deployment.

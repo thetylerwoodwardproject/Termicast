@@ -305,9 +305,15 @@ Termicast keeps a private backup outside server include directories, restores th
 selected file if editing or validation fails, and asks before reloading. After a
 reload it runs public hosting checks again. The displayed backup is in a temporary
 directory; copy it elsewhere if you need long-term retention. Only the selected
-file is backed up. Use an account with the required file and server-control
-permissions; Termicast does not invoke sudo. Custom server configurations or
-container-managed servers should be corrected through their deployment tooling.
+file is backed up.
+
+Validation and reload must run as root — they read TLS private keys that Let's
+Encrypt keeps root-only and signal a root-owned master process. Termicast
+therefore runs those commands with `sudo` when it is not already root (and opens
+the editor with `sudo` too when the config file is not writable by your account).
+You will be prompted for your sudo password. If `sudo` is not installed, run
+`sudo termicast fix-host-mime <show-id>` instead. Custom server configurations
+or container-managed servers should be corrected through their deployment tooling.
 
 Finding a server executable does not prove it serves the public URL. Confirm the
 site before editing. S3/CDN media headers may require object metadata or CDN fixes;

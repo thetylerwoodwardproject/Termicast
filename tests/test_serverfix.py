@@ -1,3 +1,5 @@
+import os
+import subprocess
 from unittest.mock import Mock
 
 import pytest
@@ -61,6 +63,61 @@ def test_reload_checks_syntax_first(monkeypatch, name, args):
     monkeypatch.setattr(serverfix, "run_control", control)
     serverfix.reload_server(name, "/tool")
     assert control.call_args_list == [(("/tool", "-t"),), (("/tool", *args),)]
+
+
+def test_run_control_uses_sudo_when_not_root(monkeypatch):
+    monkeypatch.setattr(serverfix.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(serverfix.shutil, "which", lambda name: "/usr/bin/" + name)
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(serverfix.subprocess, "run", run)
+    serverfix.run_control("/usr/sbin/nginx", "-t")
+    assert run.call_args.args[0] == ["/usr/bin/sudo", "/usr/sbin/nginx", "-t"]
+
+
+def test_run_control_skips_sudo_when_root(monkeypatch):
+    monkeypatch.setattr(serverfix.os, "geteuid", lambda: 0)
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(serverfix.subprocess, "run", run)
+    serverfix.run_control("/usr/sbin/nginx", "-t")
+    assert run.call_args.args[0] == ["/usr/sbin/nginx", "-t"]
+
+
+def test_editor_uses_sudo_when_config_not_writable(monkeypatch, tmp_path):
+    config = tmp_path / "site.conf"
+    config.write_text("original")
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setattr(serverfix.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(serverfix.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(serverfix.os, "access", lambda path, mode: mode != os.W_OK)
+    monkeypatch.setattr(serverfix, "run_control", Mock(return_value=None))
+    monkeypatch.setattr(serverfix.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "backups"))
+    (tmp_path / "backups").mkdir()
+    edits = []
+
+    def fake_run(args, **kwargs):
+        edits.append(args)
+        return Mock(returncode=0)
+    monkeypatch.setattr(serverfix.subprocess, "run", fake_run)
+    serverfix.edit_site_config(config, "/usr/sbin/nginx")
+    assert edits and edits[0] == ["/usr/bin/sudo", "vim", str(config)]
+
+
+def test_write_bytes_uses_sudo_when_not_writable(monkeypatch, tmp_path):
+    target = tmp_path / "site.conf"
+    target.write_text("original")
+    monkeypatch.setattr(serverfix.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(serverfix.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(serverfix.os, "access", lambda path, mode: False)
+    cp_calls = []
+
+    def fake_run(args, **kwargs):
+        cp_calls.append(args)
+        return subprocess.CompletedProcess([], 0, "", "")
+    monkeypatch.setattr(serverfix.subprocess, "run", fake_run)
+    serverfix._write_bytes(target, b"new")
+    assert cp_calls and cp_calls[0][0:2] == ["/usr/bin/sudo", "cp"]
+    assert cp_calls[0][3] == str(target)
 
 
 @pytest.mark.parametrize("action", [2, 4])

@@ -262,9 +262,11 @@ deletes remote objects automatically.
 For guided local web-server MIME repairs, open **Hosting → Correct host MIME types**.
 Termicast detects Nginx/Apache control tools, displays the required mappings, opens
 your selected site configuration in your terminal editor, backs it up, validates
-syntax, and offers a reload followed by public verification. Interactive Hosting
-checks and failed deployments also offer this flow when MIME mismatches occur.
-See `USER_GUIDE.md` for configuration scope and permissions.
+syntax, and offers a reload followed by public verification. Validation and reload
+run as root (with `sudo` when needed, so Let's Encrypt TLS keys can be read); the
+editor is also elevated when the config file is not writable by your account.
+Interactive Hosting checks and failed deployments also offer this flow when MIME
+mismatches occur. See `USER_GUIDE.md` for configuration scope and permissions.
 
 You can also run `termicast fix-host-mime <show-id>` directly on the web-server
 host. A command-line `deploy` that reports MIME errors offers this guided repair
