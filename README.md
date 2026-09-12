@@ -35,6 +35,20 @@ either to a local web server or to S3-compatible object storage.
 
 ## 🚀 Quickstart
 
+**One-command install** (recommended):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thetylerwoodwardproject/Termicast/main/install.sh | bash
+```
+
+It installs the system packages it needs, clones Termicast into
+`/opt/termicast`, sets up a virtual environment, and links `termicast` onto your
+`PATH`. It asks for your password when it needs `sudo`, and it's safe to re-run
+to pick up updates.
+
+<details>
+<summary><strong>Manual install</strong> (or if you prefer to do it by hand)</summary>
+
 ```sh
 # Get the project onto your system
 git clone https://github.com/thetylerwoodwardproject/Termicast.git termicast
@@ -48,7 +62,19 @@ python -m pip install -e '.[dev]'
 # Make `termicast` available in any shell (no venv activation needed)
 mkdir -p ~/.local/bin
 ln -s "$PWD/.venv/bin/termicast" ~/.local/bin/termicast
+```
 
+> [!NOTE]
+> Installing into `/opt` (or any root-owned folder) by hand? Take ownership
+> first so `pip` can write its build metadata:
+>
+> ```sh
+> sudo chown -R "$USER:$USER" /opt/termicast
+> ```
+
+</details>
+
+```sh
 termicast --help
 ```
 

@@ -46,7 +46,23 @@ address. You can manage several shows at once.
 
 ## 🔧 2. Installing
 
-You need a Linux server with Python 3.11+ and FFmpeg.
+You need a Linux server (Debian or Ubuntu) with Python 3.11+ and FFmpeg. The
+easiest way to get everything set up is one command. Paste this into a terminal
+and press Enter:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thetylerwoodwardproject/Termicast/main/install.sh | bash
+```
+
+It asks for your password when it needs to, then installs the tools Termicast
+needs, copies the program to `/opt/termicast`, and sets it up so you can just
+type `termicast`. You can run the same command again later to update to the
+latest version.
+
+If you'd rather do it by hand, here are the individual steps:
+
+<details>
+<summary><strong>Manual install</strong></summary>
 
 First, copy the project onto your computer. If you don't have `git`, install it
 with `sudo apt install git`, then run:
@@ -69,6 +85,16 @@ python -m pip install -e '.[dev]'
 mkdir -p ~/.local/bin
 ln -s "$PWD/.venv/bin/termicast" ~/.local/bin/termicast
 ```
+
+> [!NOTE]
+> Installing into `/opt` (or any folder owned by root) by hand? Take ownership
+> first so `pip` can write its files:
+>
+> ```sh
+> sudo chown -R "$USER:$USER" /opt/termicast
+> ```
+
+</details>
 
 Then start it any time with:
 
