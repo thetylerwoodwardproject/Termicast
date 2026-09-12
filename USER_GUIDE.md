@@ -40,6 +40,10 @@ cd /opt/termicast
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
+
+# Make `termicast` work in any terminal (no activation needed)
+mkdir -p ~/.local/bin
+ln -s "$PWD/.venv/bin/termicast" ~/.local/bin/termicast
 ```
 
 Then start it any time with:
@@ -47,6 +51,11 @@ Then start it any time with:
 ```sh
 termicast
 ```
+
+If it isn't found, log out and back in so `~/.local/bin` gets added to your
+`PATH`. For a shortcut that only works in an interactive terminal, you can
+instead add `alias termicast='/opt/termicast/.venv/bin/termicast'` to
+`~/.bashrc`.
 
 ---
 

@@ -20,8 +20,21 @@ sudo apt install python3 python3-venv ffmpeg
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
+
+# Make `termicast` available in any shell (no venv activation needed)
+mkdir -p ~/.local/bin
+ln -s "$PWD/.venv/bin/termicast" ~/.local/bin/termicast
+
 termicast --help
 ```
+
+The symlink puts `termicast` on your `PATH` so it works in any shell, script,
+or cron entry. `~/.local/bin` must be on `PATH` — most distros add it at login
+via `~/.profile`, so log out and back in if `termicast` isn't found right away.
+For an interactive-only shortcut instead, add
+`alias termicast='/opt/termicast/.venv/bin/termicast'` to `~/.bashrc`. Keep
+`.venv` in place; the editable install (`-e`) already picks up code changes
+without reinstalling.
 
 Run `termicast` to create or import a podcast. Then add an episode:
 
