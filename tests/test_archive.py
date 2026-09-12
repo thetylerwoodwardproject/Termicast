@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 from PIL import Image
@@ -96,6 +97,27 @@ def test_import_archive_installs_without_redownload(tmp_path):
     assert episodes[0]["mp3_url"] == "https://new.example.org/show/audio/ep1.mp3"
     assert (tmp_path / "out" / "audio" / "ep1.mp3").is_file()
     assert show["import_url_map"]["https://old.example.org/audio/ep1.mp3"] == "https://new.example.org/show/audio/ep1.mp3"
+
+
+def test_import_archive_stages_inside_a_preexisting_output_dir(tmp_path):
+    """A pre-created, writable output directory needs no write access to its
+    parent (e.g. a shared, root-owned web root the deploy account can't touch).
+    """
+    manifest = make_archive(tmp_path)
+    identity = archive_identity(manifest)
+    show = new_show(**identity)
+    show.update(identity)
+    out = tmp_path / "webroot" / "out"
+    out.parent.mkdir()
+    out.mkdir()
+    show["output_dir"] = str(out)
+    show["base_url"] = "https://new.example.org/show"
+    os.chmod(out.parent, 0o555)
+    try:
+        show, episodes, template = import_archive(show, manifest)
+    finally:
+        os.chmod(out.parent, 0o755)
+    assert (out / "audio" / "ep1.mp3").is_file()
 
 
 def test_import_archive_refuses_an_existing_feed(tmp_path):
