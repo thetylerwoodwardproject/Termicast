@@ -7,6 +7,20 @@ to edit XML by hand.
 
 This guide explains how to use it, step by step, in plain language.
 
+## 📑 Contents
+
+- [🧩 1. The basics, in one minute](#-1-the-basics-in-one-minute)
+- [🔧 2. Installing](#-2-installing)
+- [🧭 3. The main menu](#-3-the-main-menu)
+- [🎬 4. Creating your first podcast](#-4-creating-your-first-podcast)
+- [🎧 5. Adding an episode](#-5-adding-an-episode-the-main-thing-youll-do)
+- [⏰ 6. Scheduling an episode](#-6-scheduling-an-episode)
+- [📦 7. Importing an existing podcast](#-7-importing-an-existing-podcast)
+- [🌐 8. Hosting (where your files live)](#-8-hosting-where-your-files-live)
+- [💾 9. Backing up your data](#-9-backing-up-your-data)
+- [❓ 10. Getting help](#-10-getting-help)
+- [📋 11. Command cheat sheet](#-11-command-cheat-sheet)
+
 ---
 
 ## 🧩 1. The basics, in one minute

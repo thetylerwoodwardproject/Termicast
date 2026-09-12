@@ -16,6 +16,23 @@ either to a local web server or to S3-compatible object storage.
 
 ![Termicast broadcast console: the main menu with options to open, import, create, or forget a podcast](docs/screenshot.png)
 
+## 📑 Contents
+
+- [🚀 Quickstart](#-quickstart)
+- [🧭 Commands](#-commands)
+- [🎧 Episode workflow](#-episode-workflow)
+  - [🎯 Presets](#-presets)
+  - [🔖 Slugs and files](#-slugs-and-files)
+- [⏰ Scheduling and cron](#-scheduling-and-cron)
+- [🌐 Hosting](#-hosting)
+  - [🌍 Multiple podcasts on S3](#-multiple-podcasts-on-s3)
+  - [🔐 S3 public access and caching](#-s3-public-access-and-caching)
+- [📦 Import and migration](#-import-and-migration)
+- [📈 Podcast metrics (OP3)](#-podcast-metrics-op3)
+- [💾 Backup and restore](#-backup-and-restore)
+- [🔮 Planned additions](#-planned-additions)
+- [🚧 Limits](#-limits)
+
 ## 🚀 Quickstart
 
 ```sh
