@@ -5,6 +5,7 @@ local-versus-remote feed content. It is read-only by default and never probes
 bucket writes or deletes. Public verification is shared with S3 deployment.
 """
 
+import json
 import shutil
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -172,3 +173,37 @@ def apache_snippet(show) -> str:
         "AddType audio/mpeg                .mp3\n"
         "AddType image/jpeg                .jpg .jpeg\n"
     )
+
+
+def s3_write_policy_snippet(show) -> str:
+    """Return a copy-pasteable AWS IAM policy JSON scoped to exactly what
+    Termicast needs for this bucket/prefix: list that prefix, and read/write/
+    delete objects under it. Nothing broader.
+
+    Attach it to the IAM user or role whose access key lives in ~/.s3cfg.
+    Listing a bucket can succeed with read-only credentials while every
+    PutObject is denied, so this is offered whenever an upload comes back
+    AccessDenied -- a missing s3:PutObject grant is the most common cause.
+    """
+    bucket = show["bucket"]
+    prefix = show.get("prefix", "")
+    object_glob = f"{prefix}/*" if prefix else "*"
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "TermicastListPrefix",
+                "Effect": "Allow",
+                "Action": "s3:ListBucket",
+                "Resource": f"arn:aws:s3:::{bucket}",
+                "Condition": {"StringLike": {"s3:prefix": [object_glob]}},
+            },
+            {
+                "Sid": "TermicastReadWritePrefix",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                "Resource": f"arn:aws:s3:::{bucket}/{object_glob}",
+            },
+        ],
+    }
+    return json.dumps(policy, indent=2)

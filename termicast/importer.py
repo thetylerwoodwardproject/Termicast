@@ -236,14 +236,28 @@ def _shared_asset_urls(episodes):
 
 
 def _check_name_destinations(assets, slugs):
-    """Refuse before downloading anything if a chosen name is already taken."""
-    collisions = []
+    """Refuse before downloading anything if a chosen name is already taken.
+
+    A single naming scheme collision (e.g. a whole directory of leftover
+    episodes) hits every asset of every episode -- audio, artwork, transcript,
+    chapters -- so the raw per-file list can run into the hundreds of lines.
+    Group by slug and show only the first few so the message stays readable;
+    the point is "which naming scheme collides and where", not a full dump.
+    """
+    collisions = {}
     for slug in slugs:
         for folder in ("audio", "images", "images/episodes", "transcripts", "chapters"):
             for existing in (assets / folder).glob(slug + ".*"):
-                collisions.append(f"{slug} is already taken by {existing}")
-    if collisions:
-        raise ValueError("Episode name(s) already taken: " + "; ".join(collisions))
+                collisions.setdefault(slug, []).append(str(existing.relative_to(assets)))
+    if not collisions:
+        return
+    names = sorted(collisions)
+    shown = [f"{slug} ({', '.join(collisions[slug])})" for slug in names[:5]]
+    if len(names) > 5:
+        shown.append(f"and {len(names) - 5} more")
+    raise ValueError(
+        f"{len(names)} episode name(s) already taken in {assets}: " + "; ".join(shown) +
+        ". Pick a different naming scheme, or move/remove the existing files first.")
 
 
 def _clear_previous_import(output):

@@ -337,7 +337,8 @@ def _pick_output_dir(destination):
 
 
 def _configure_hosting(destination):
-    """Collect hosting settings, verifying an S3 destination is reachable now.
+    """Collect hosting settings, verifying an S3 destination is reachable and
+    writable now.
 
     Failing fast here means a bad bucket/endpoint/credential is caught before
     the rest of the import wizard (feed fetch, metadata review, naming) runs.
@@ -347,7 +348,7 @@ def _configure_hosting(destination):
         hosting_form(destination)
         if destination.get("hosting") != "s3":
             return
-        console.print("Verifying the S3 destination is reachable...", markup=False)
+        console.print("Verifying the S3 destination is reachable and writable...", markup=False)
         try:
             from .s3deploy import check_s3_destination
             check_s3_destination(destination)

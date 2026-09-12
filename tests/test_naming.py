@@ -136,6 +136,26 @@ def test_import_refuses_when_the_name_is_taken(tmp_path):
         imported(tmp_path, naming="ep")
 
 
+def test_name_collision_error_groups_by_slug_and_truncates(tmp_path):
+    from termicast.importer import _check_name_destinations
+    assets = tmp_path / "assets"
+    (assets / "audio").mkdir(parents=True)
+    (assets / "images" / "episodes").mkdir(parents=True)
+    (assets / "transcripts").mkdir(parents=True)
+    slugs = [f"ep{i:03d}" for i in range(1, 45)]
+    for slug in slugs:
+        (assets / "audio" / f"{slug}.mp3").write_bytes(b"x")
+        (assets / "images" / "episodes" / f"{slug}.jpg").write_bytes(b"x")
+        (assets / "transcripts" / f"{slug}.vtt").write_bytes(b"x")
+    with pytest.raises(ValueError) as excinfo:
+        _check_name_destinations(assets, slugs)
+    message = str(excinfo.value)
+    assert message.startswith("44 episode name(s) already taken")
+    assert message.count(".mp3") == 5
+    assert "and 39 more" in message
+    assert "ep001 (audio/ep001.mp3, images/episodes/ep001.jpg, transcripts/ep001.vtt)" in message
+
+
 # --- the import-time prompt ----------------------------------------------
 
 def _menu_sequence(monkeypatch, answers):

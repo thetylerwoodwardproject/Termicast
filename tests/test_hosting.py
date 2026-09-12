@@ -20,6 +20,26 @@ def test_apache_snippet_has_four_types():
         assert content_type in snippet
 
 
+def test_s3_write_policy_snippet_scopes_to_bucket_and_prefix():
+    import json
+    show = new_show(base_url="https://e.org/show", hosting="s3", bucket="my-bucket", prefix="my-show")
+    policy = json.loads(hosting.s3_write_policy_snippet(show))
+    actions = {action for statement in policy["Statement"] for action in
+               ([statement["Action"]] if isinstance(statement["Action"], str) else statement["Action"])}
+    assert actions == {"s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"}
+    resources = [statement["Resource"] for statement in policy["Statement"]]
+    assert "arn:aws:s3:::my-bucket" in resources
+    assert "arn:aws:s3:::my-bucket/my-show/*" in resources
+
+
+def test_s3_write_policy_snippet_without_prefix_uses_wildcard():
+    import json
+    show = new_show(base_url="https://e.org/show", hosting="s3", bucket="my-bucket", prefix="")
+    policy = json.loads(hosting.s3_write_policy_snippet(show))
+    resources = [statement["Resource"] for statement in policy["Statement"]]
+    assert "arn:aws:s3:::my-bucket/*" in resources
+
+
 def test_check_url_ok(monkeypatch):
     monkeypatch.setattr(hosting, "_head_or_range", lambda url, expected=None: (200, "text/vtt", b"x"))
     assert hosting.check_url("https://e.org/t.vtt", "text/vtt") == []

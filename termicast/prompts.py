@@ -1009,13 +1009,14 @@ def edit_episode_form(db, show, publisher, saved):
 
 def hosting_menu(db, publisher, show):
     """Hosting submenu: setup, deploy, checks, and guidance."""
-    from .hosting import doctor, nginx_snippet, apache_snippet
+    from .hosting import doctor, nginx_snippet, apache_snippet, s3_write_policy_snippet
     while True:
         action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
                                   "Hosting checks (doctor)", "Nginx MIME snippet",
-                                  "Apache MIME snippet", "Migration guidance", "Back"])
+                                  "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
+                                  "Migration guidance", "Back"])
         try:
-            if action == 8:
+            if action == 9:
                 return
             if action == 1:
                 data = dict(show)
@@ -1042,6 +1043,11 @@ def hosting_menu(db, publisher, show):
             elif action == 6:
                 console.print(apache_snippet(show), markup=False)
             elif action == 7:
+                if show.get("hosting") != "s3":
+                    warning("This show isn't using S3 hosting; no bucket policy applies.")
+                else:
+                    console.print(s3_write_policy_snippet(show), markup=False)
+            elif action == 8:
                 from .migration import migration_guidance
                 console.print(migration_guidance(show), markup=False)
         except ExitRequested:
