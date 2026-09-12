@@ -272,7 +272,8 @@ Under **4. Hosting** in your show's menu:
 | **3. Deploy (dry run)** | Show what would be uploaded, without doing it |
 | **4. Hosting checks (doctor)** | Check your feed and files are publicly reachable |
 | **5/6. Nginx/Apache snippet** | A paste-in MIME-type config for your web server |
-| **7. Migration guidance** | Instructions for switching from another host |
+| **7. S3 write-access policy** | A paste-in AWS IAM policy granting exactly the S3 access Termicast needs |
+| **8. Migration guidance** | Instructions for switching from another host |
 
 **Local hosting** is simplest: your web server serves everything — feed and
 media — from the output folder.
@@ -298,6 +299,15 @@ files. You'll set two addresses:
 > [!IMPORTANT]
 > Put your S3 credentials in a file called `~/.s3cfg` on the server (never in
 > Termicast). Termicast only stores the bucket name and addresses.
+
+> [!TIP]
+> Termicast checks that your credentials can both list *and write to* the
+> bucket before it lets you continue — a key that can only list or read is a
+> common source of confusing "Access Denied" errors partway through an
+> import. If a check fails, or an upload is denied later, Termicast prints a
+> ready-to-paste fix: an AWS IAM policy scoped to exactly the access it
+> needs, or a checklist for other providers. You can also pull that policy
+> up any time from **Hosting → S3 write-access policy**.
 
 When setting up S3, you'll also be asked: **"Keep a local copy of media after
 it's uploaded to S3?"**

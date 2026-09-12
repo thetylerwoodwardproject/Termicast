@@ -205,6 +205,16 @@ Hosting is configured under **Hosting** in the show menu:
   `enabled` controls automatic deployment on publish/schedule; `deploy` works
   with valid configuration even when it is disabled.
 
+Configuring S3 hosting verifies the destination is both listable and
+*writable* before continuing (`check_s3_destination()` in `s3deploy.py`
+uploads and deletes a small probe object) — a set of credentials that can
+list a bucket but not write to it is a common misconfiguration, and this
+catches it at setup instead of partway through a deploy. If an upload later
+fails with an access-denied error, Termicast appends a ready-to-use fix to
+the error: a scoped IAM policy JSON for AWS buckets, or a permissions
+checklist for other S3-compatible providers. That same policy is available
+any time from the show menu under **Hosting → S3 write-access policy**.
+
 > [!IMPORTANT]
 > By default, once a media asset is on S3 its local working copy is removed,
 > so the output directory holds only `feed.xml` (plus regenerated
