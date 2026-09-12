@@ -380,11 +380,12 @@ def hosting_form(data):
                       "Example ~/.s3cfg: access_key, secret_key, host_base, host_bucket.", markup=False)
         for field, label in (("endpoint_url", "HTTPS S3 API endpoint (blank for AWS; e.g. https://us-east-1.linodeobjects.com)"),
                              ("bucket", "Bucket name"),
-                             ("prefix", "Show prefix (optional, no outer slashes)")):
-            data[field] = text(label, data.get(field, ""), required=field == "bucket")
+                             ("prefix", "Show prefix (optional, no outer slashes)"),
+                             ("asset_base_url", "Public asset URL of the bucket/prefix (e.g. https://my-bucket.us-east-1.linodeobjects.com/my-show)")):
+            data[field] = text(label, data.get(field, ""), required=field in ("bucket", "asset_base_url"))
         data["enabled"] = confirm("Automatically deploy on publish/schedule?", bool(data.get("enabled", False)))
     else:
-        for field in ("endpoint_url", "bucket", "prefix", "enabled"):
+        for field in ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled"):
             data.pop(field, None)
     errors = validate_storage(data)
     if errors:

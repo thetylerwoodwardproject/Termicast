@@ -182,23 +182,35 @@ Termicast can't do that redirect for you — your old host must.
 
 ## 8. Hosting (where your files live)
 
+One thing stays the same no matter what: **your feed file (`feed.xml`) always
+stays on your own web server.** It's written to the show's output folder and
+served from your base URL. Only the big media files (audio, artwork,
+transcripts, chapters) can optionally move to cloud storage.
+
 Under **4. Hosting** in your show's menu:
 
 | Option | What it does |
 | --- | --- |
 | **1. Configure hosting** | Choose local hosting or S3-compatible storage |
-| **2. Deploy** | Push your files to your hosting |
+| **2. Deploy** | Push your media files to your hosting |
 | **3. Deploy (dry run)** | Show what would be uploaded, without doing it |
 | **4. Hosting checks (doctor)** | Check your feed and files are publicly reachable |
 | **5/6. Nginx/Apache snippet** | A paste-in MIME-type config for your web server |
 | **7. Migration guidance** | Instructions for switching from another host |
 
-**Local hosting** is simplest: your web server serves the files directly from
-the output folder. **S3 storage** (Amazon S3, Linode, etc.) stores your audio
-and artwork in a bucket — useful for large files and cheaper bandwidth.
+**Local hosting** is simplest: your web server serves everything — feed and
+media — from the output folder.
 
-If you use S3, put your credentials in a file called `~/.s3cfg` on the server
-(never in Termicast). Termicast only stores the bucket name and settings.
+**S3 storage** (Amazon S3, Linode, etc.) keeps your feed on your web server but
+moves the audio and artwork into a bucket, which is usually cheaper for big
+files. You'll set two addresses:
+
+- **Base URL** — where your web server serves `feed.xml`.
+- **Asset base URL** — the public address of your bucket (e.g.
+  `https://my-bucket.us-east-1.linodeobjects.com/my-show`).
+
+Put your S3 credentials in a file called `~/.s3cfg` on the server (never in
+Termicast). Termicast only stores the bucket name and addresses.
 
 ---
 

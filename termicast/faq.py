@@ -7,9 +7,9 @@ FAQ = """# Termicast FAQ
 Run `termicast`, then use the numbered menus to create or import a podcast.
 Set its local output directory, public HTTPS base URL, and timezone. Save the
 show, then open it to add episodes from local media files. Termicast writes
-`feed.xml` locally and can deploy assets and the feed to S3-compatible storage.
-The base URL is the public root of the show's files, not a URL ending in
-`feed.xml`.
+`feed.xml` to the output directory, where your web server serves it; media
+assets can optionally be deployed to S3-compatible storage. The base URL is a
+directory URL, not the URL ending in `feed.xml`.
 
 ## How do I add an episode?
 
@@ -104,11 +104,16 @@ and keep-original options are available in review and via CLI flags.
 ## What hosting do I need?
 
 Arrange publicly readable HTTPS hosting for the feed, chapters, MP3s, artwork, and
-transcripts. Termicast supports **local web server** (files served directly from
-the output directory) or **S3-compatible storage** (files uploaded with `s4cmd`).
-For S3, configure credentials outside Termicast in `~/.s3cfg` and set the endpoint,
-bucket, and optional prefix in the **Hosting** submenu. `feed.xml` is uploaded last,
-after its assets, and is never referenced until its assets are in place. Deploy with
+transcripts. **Your feed (`feed.xml`) always stays on your web server**, in the
+show's output directory, served from `base_url/feed.xml`. Only the media assets
+can move off the web server.
+
+Termicast supports **local web server** (feed and media all served directly from
+the output directory) or **S3-compatible storage** (media uploaded with `s4cmd`,
+while the feed remains on your web server). For S3, configure credentials outside
+Termicast in `~/.s3cfg`, then set the endpoint, bucket, optional prefix, and the
+public **asset base URL** in the **Hosting** submenu. The feed references those
+asset URLs and is written last, after its media is in place. Deploy with
 `termicast deploy <show-id>` and verify with `termicast doctor <show-id>`.
 
 ## What does doctor check?

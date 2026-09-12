@@ -75,21 +75,18 @@ def upload_file(show, local_path, remote_relative, dry_run=False):
 
 
 def deploy_paths(show, relative_paths, source_root=None, *, dry_run=False, verify=True):
-    """Upload and verify a batch, ordering all assets before the feed.
+    """Upload and verify a batch of managed assets in the given order.
 
-    `relative_paths` is the explicit set of managed files to deploy. A failed
-    required asset blocks the feed upload (the feed is uploaded last). Returns
-    the list of uploaded relative paths.
+    `relative_paths` is the explicit set of managed asset files to deploy
+    (never `feed.xml`, which stays on the web server). A failed upload stops
+    the batch and raises. Returns the list of uploaded relative paths.
     """
     if not relative_paths:
         return []
     root = Path(source_root) if source_root else asset_root(show)
-    ordered = [p for p in relative_paths if p != "feed.xml"]
-    if "feed.xml" in relative_paths:
-        ordered.append("feed.xml")
     uploaded = []
     problems = []
-    for relative in ordered:
+    for relative in relative_paths:
         try:
             upload_file(show, root / relative, relative, dry_run=dry_run)
             uploaded.append(relative)

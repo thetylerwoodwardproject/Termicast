@@ -238,7 +238,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "enabled")})
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled")})
             show = show_form(show)
             if show is None:
                 return
@@ -253,7 +253,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "enabled")})
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled")})
             show = show_form(show)
             if show is None:
                 return
@@ -350,7 +350,7 @@ def main(argv=None):
     add.add_argument("--image-preset", choices=("compact", "detail"), help="Override the show's image preset.")
     add.add_argument("--keep-audio", action="store_true", help="Keep the original audio instead of optimizing.")
     add.add_argument("--keep-image", action="store_true", help="Keep the original artwork instead of optimizing.")
-    deploy = commands.add_parser("deploy", help="Upload saved assets then the feed; verify by default.")
+    deploy = commands.add_parser("deploy", help="Upload saved media assets to S3 (feed.xml stays on the web server); verify by default.")
     deploy.add_argument("show_id")
     deploy.add_argument("--dry-run", action="store_true", help="No uploads or bucket probes.")
     deploy.add_argument("--no-verify", action="store_true", help="Skip post-deploy public verification.")

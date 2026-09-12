@@ -177,7 +177,8 @@ class Publisher:
         return count
 
     def deploy(self, show_id, dry_run=False, verify=True):
-        """Standalone deploy: upload saved assets then the feed, and verify."""
+        """Standalone deploy: upload saved assets (S3) and verify. `feed.xml`
+        always stays on the web server and is never uploaded."""
         show = self.db.get_show(show_id)
         if show is None:
             raise ValueError("Unknown podcast ID")
@@ -185,24 +186,24 @@ class Publisher:
         with operation_lock(show):
             with self.db.lock():
                 episodes = [e for e in self.db.list_episodes(show_id) if e["status"] == "published"]
-            paths = {"feed.xml"}
+            assets = set()
             for episode in episodes:
-                paths |= episode_asset_paths(episode)
+                assets |= episode_asset_paths(episode)
             if show.get("hosting") == "s3":
                 from .s3deploy import deploy_paths
-                return deploy_paths(show, sorted(paths), dry_run=dry_run, verify=verify)
+                return deploy_paths(show, sorted(assets), dry_run=dry_run, verify=verify)
             feed = asset_root(show) / "feed.xml"
             if not feed.is_file():
                 raise ValueError("No local feed.xml to deploy; publish or regenerate first")
             if verify and not dry_run:
                 from .hosting import check_url
                 from .media import content_type_for
-                problems = []
-                for relative in sorted(paths):
+                problems = list(check_url(asset_base(show) + "/feed.xml", "application/rss+xml"))
+                for relative in sorted(assets):
                     problems.extend(check_url(asset_base(show) + "/" + relative, content_type_for(relative)))
                 if problems:
                     raise RuntimeError("; ".join(problems))
-            return sorted(paths)
+            return sorted(assets | {"feed.xml"})
 
     def _snapshot(self, show_id, now, include_due, release_guids):
         with self.db.connection() as conn:
@@ -232,9 +233,11 @@ class Publisher:
                 with self.db.connection() as conn:
                     conn.execute("UPDATE shows SET dirty=1 WHERE id=?", (show_id,))
             with output_lock(show):
-                self._write_local(snapshot)
+                self._write_assets(snapshot)
             if show.get("hosting") == "s3" and show.get("enabled"):
                 self._deploy_remote(snapshot, show)
+            with output_lock(show):
+                atomic_write(Path(show["output_dir"]) / "feed.xml", snapshot["data"])
             with self.db.lock():
                 with self.db.connection() as conn:
                     conn.executemany("UPDATE episodes SET status='published' WHERE show_id=? AND guid=?",
@@ -242,10 +245,8 @@ class Publisher:
                     conn.execute("UPDATE shows SET dirty=0 WHERE id=?", (show_id,))
         return sum(r["status"] != "published" for r in snapshot["selected"])
 
-    def _write_local(self, snapshot):
+    def _write_assets(self, snapshot):
         show = snapshot["show"]
-        output = Path(show["output_dir"])
-        output.mkdir(parents=True, exist_ok=True)
         assets = asset_root(show)
         assets.mkdir(parents=True, exist_ok=True)
         for episode in snapshot["episodes"]:
@@ -257,11 +258,10 @@ class Publisher:
                 chapters = {"version": "1.2.0", "chapters": episode["chapters"]}
                 atomic_write(assets / chapters_relative(episode),
                              (json.dumps(chapters, ensure_ascii=True, allow_nan=False, indent=2) + "\n").encode())
-        atomic_write(output / "feed.xml", snapshot["data"])
 
     def _deploy_remote(self, snapshot, show):
         from .s3deploy import deploy_paths
-        paths = {"feed.xml"}
+        paths = set()
         for episode in snapshot["episodes"]:
             paths |= episode_asset_paths(episode)
         try:

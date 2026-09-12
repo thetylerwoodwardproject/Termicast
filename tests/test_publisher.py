@@ -64,8 +64,8 @@ def test_deploy_local_returns_paths(db, show):
     assert "audio/e1.mp3" in paths
 
 
-def test_s3_publish_uploads_feed_last(db, show, monkeypatch):
-    show = dict(show, hosting="s3", bucket="b", prefix="p", enabled=True)
+def test_s3_publish_uploads_assets_not_feed(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show", enabled=True)
     db.save_show(show)
     uploaded = []
     from termicast import s3deploy
@@ -73,11 +73,13 @@ def test_s3_publish_uploads_feed_last(db, show, monkeypatch):
                         lambda s, paths, dry_run=False, verify=True: uploaded.append(list(paths)))
     Publisher(db).publish(show["id"], make_episode())
     assert uploaded, "deploy_paths should have been called"
-    assert uploaded[0][-1] == "feed.xml"
+    assert "feed.xml" not in uploaded[0]
+    assert "audio/e1.mp3" in uploaded[0]
+    assert (Path(show["output_dir"]) / "feed.xml").is_file()
 
 
 def test_s3_disabled_skips_auto_deploy(db, show, monkeypatch):
-    show = dict(show, hosting="s3", bucket="b", prefix="p", enabled=False)
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show", enabled=False)
     db.save_show(show)
     calls = []
     from termicast import s3deploy

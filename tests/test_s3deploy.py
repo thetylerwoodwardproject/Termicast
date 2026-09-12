@@ -64,25 +64,24 @@ def test_upload_file_rejects_unknown_content_type(tmp_path, monkeypatch):
         upload_file(show, local, "weird.bin")
 
 
-def test_deploy_paths_orders_feed_last(tmp_path, monkeypatch):
+def test_deploy_paths_uploads_in_order(tmp_path, monkeypatch):
     show = s3_show(tmp_path)
     root = tmp_path / "out"
     (root / "audio").mkdir(parents=True)
-    for relative in ("audio/x.mp3", "chapters/x.json", "feed.xml"):
+    for relative in ("audio/x.mp3", "chapters/x.json"):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"data")
     uploaded = []
     monkeypatch.setattr(s3deploy, "upload_file", lambda show, local, rel, dry_run=False: uploaded.append(rel))
-    deploy_paths(show, ["feed.xml", "audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
-    assert uploaded[-1] == "feed.xml"
-    assert uploaded[:-1] == ["audio/x.mp3", "chapters/x.json"]
+    deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
+    assert uploaded == ["audio/x.mp3", "chapters/x.json"]
 
 
-def test_deploy_paths_blocks_feed_when_asset_fails(tmp_path, monkeypatch):
+def test_deploy_paths_stops_on_failure(tmp_path, monkeypatch):
     show = s3_show(tmp_path)
     root = tmp_path / "out"
-    for relative in ("audio/x.mp3", "feed.xml"):
+    for relative in ("audio/x.mp3", "chapters/x.json"):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"data")
@@ -94,4 +93,4 @@ def test_deploy_paths_blocks_feed_when_asset_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(s3deploy, "upload_file", fail)
     with pytest.raises(RuntimeError, match="audio/x.mp3"):
-        deploy_paths(show, ["audio/x.mp3", "feed.xml"], source_root=root, verify=False)
+        deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)

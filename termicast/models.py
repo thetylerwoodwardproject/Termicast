@@ -62,7 +62,7 @@ def new_show(**kwargs) -> dict:
     show = dict.fromkeys((
         "title", "description", "author", "owner_name", "owner_email", "website",
         "copyright", "artwork_url", "category", "subcategory", "secondary_category",
-        "funding_url", "funding_label", "output_dir", "base_url",
+        "funding_url", "funding_label", "output_dir", "base_url", "asset_base_url",
     ), "")
     show.update(id=str(uuid4()), locked=False, explicit=False, language="en",
                 podcast_type="episodic", timezone="UTC", podroll=[],

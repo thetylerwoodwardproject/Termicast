@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
-from .storage import asset_base, asset_root
+from .storage import asset_base, asset_root, feed_url
 
 
 def _head_or_range(url, expected_content_type=None):
@@ -70,16 +70,16 @@ def check_tools(show) -> list[str]:
 def check_feed(show) -> list[str]:
     """Check the public feed's accessibility, type, and content freshness."""
     problems = []
-    feed_url = asset_base(show) + "/feed.xml"
-    problems.extend(check_url(feed_url, "application/rss+xml"))
+    public_feed = feed_url(show)
+    problems.extend(check_url(public_feed, "application/rss+xml"))
     local = asset_root(show) / "feed.xml"
     if not local.is_file():
         problems.append("Local feed.xml does not exist; generate it first")
         return problems
     local_bytes = local.read_bytes()
-    status, _, body = _head_or_range(feed_url)
+    status, _, body = _head_or_range(public_feed)
     if status == 200:
-        remote = _full_body(feed_url)
+        remote = _full_body(public_feed)
         if remote is None:
             problems.append("Feed is reachable but its full content could not be compared")
         elif remote != local_bytes:

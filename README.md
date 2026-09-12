@@ -36,7 +36,7 @@ file type. Media files must be on the machine running Termicast.
 ```text
 termicast                                   interactive menus
 termicast add <show-id> FILE...             prepare and publish an episode
-termicast deploy <show-id>                  upload saved assets then the feed
+termicast deploy <show-id>                  upload saved media assets (S3)
 termicast deploy <show-id> --dry-run        no uploads or bucket probes
 termicast doctor [show-id]                  read-only hosting/media checks
 termicast validate [show-id]                offline feed validation
@@ -93,21 +93,29 @@ with other episodes are rejected before install.
 
 ## Hosting
 
-Each show has an output directory and a public HTTPS **base URL** (the public
-root of the show's files). Hosting is configured under **Hosting** in the show
-menu:
+Each show has an output directory and a public HTTPS **base URL**. The feed file
+`feed.xml` **always stays on your web server**: it is written to the output
+directory and served from `base_url/feed.xml`. Only the media assets (audio,
+artwork, transcripts, chapters) can optionally move to object storage.
 
-- **Local web server**: files are served directly from the output directory.
-- **S3-compatible storage**: files are retained locally and uploaded with
-  `s4cmd`, in order, with `feed.xml` last. Configure credentials outside
-  Termicast in `~/.s3cfg`; set the endpoint, bucket, and optional prefix in
-  Termicast. `enabled` controls automatic deployment on publish/schedule;
-  `deploy` works with valid configuration even when it is disabled.
+Hosting is configured under **Hosting** in the show menu:
 
-Deployment uses one `s4cmd` subprocess at a time (64 MiB single-part threshold,
-16 MiB multipart parts, 2 workers), sets explicit Content-Types, skips unchanged
-objects via s4cmd's checksum metadata, and never deletes remote objects
-automatically.
+- **Local web server**: everything — the feed and the media — is served directly
+  from the output directory.
+- **S3-compatible storage**: the feed stays on your web server (output
+  directory + `base_url`), while media assets are uploaded with `s4cmd` to a
+  bucket/prefix whose public root is a separate **asset base URL**
+  (e.g. `https://my-bucket.us-east-1.linodeobjects.com/my-show`). The feed
+  references those asset URLs. Configure credentials outside Termicast in
+  `~/.s3cfg`; set the endpoint, bucket, prefix, and asset base URL in Termicast.
+  `enabled` controls automatic deployment on publish/schedule; `deploy` works
+  with valid configuration even when it is disabled.
+
+`feed.xml` is written last, after its media is in place, so the feed never
+references a missing file. Deployment uses one `s4cmd` subprocess at a time
+(64 MiB single-part threshold, 16 MiB multipart parts, 2 workers), sets explicit
+Content-Types, skips unchanged objects via s4cmd's checksum metadata, and never
+deletes remote objects automatically.
 
 `doctor` is read-only and checks tools, public feed/media accessibility, MIME
 types, and local-versus-remote feed content. `deploy --dry-run` performs no
