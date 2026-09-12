@@ -237,25 +237,27 @@ def _shared_asset_urls(episodes):
 
 def _check_name_destinations(assets, slugs):
     """Refuse before downloading anything if a chosen name is already taken."""
+    collisions = []
     for slug in slugs:
         for folder in ("audio", "images", "images/episodes", "transcripts", "chapters"):
             for existing in (assets / folder).glob(slug + ".*"):
-                raise ValueError(f"Episode name {slug} is already taken by {existing}")
+                collisions.append(f"{slug} is already taken by {existing}")
+    if collisions:
+        raise ValueError("Episode name(s) already taken: " + "; ".join(collisions))
 
 
-def _clear_previous_import(output, assets):
-    """Remove a previous Termicast-managed import so a fresh one can replace it.
+def _clear_previous_import(output):
+    """Remove a previous Termicast-managed feed so a fresh one can replace it.
 
-    Only feed.xml and the managed asset folders are touched; anything else the
-    user placed in the output directory is left alone.
+    Only feed.xml is touched. Asset files are never deleted here: the output
+    directory may be an existing website directory whose other folders (an
+    `images/` directory, say) have nothing to do with Termicast. Any asset
+    filename that would actually collide with a newly imported one is caught
+    later and reported, not silently removed.
     """
     feed_path = output / "feed.xml"
     if feed_path.is_file() or feed_path.is_symlink():
         feed_path.unlink()
-    for folder in ("audio", "images", "transcripts", "chapters"):
-        target = assets / folder
-        if target.is_dir() and not target.is_symlink():
-            shutil.rmtree(target)
 
 
 def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None,
@@ -274,8 +276,10 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     sequential slug instead of the hash of its source URL; None keeps the hash
     names. `naming_fallback` ("position" or "keep") decides what happens to
     episodes whose feed declares no episode number.
-    `overwrite`, when True, replaces an existing feed.xml (and the managed
-    asset folders alongside it) instead of refusing to import over it.
+    `overwrite`, when True, replaces an existing feed.xml instead of refusing
+    to import over it. Asset files are never deleted for this: a colliding
+    asset filename still raises, naming the file, so nothing Termicast didn't
+    create is ever removed automatically.
     """
     errors = validation.validate_show(show)
     if errors:
@@ -291,7 +295,7 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     if (output / "feed.xml").exists() or (output / "feed.xml").is_symlink():
         if not overwrite:
             raise ValueError("Destination feed.xml already exists")
-        _clear_previous_import(output, assets)
+        _clear_previous_import(output)
     if show.get("hosting") == "s3":
         from .s3deploy import check_s3_destination
         check_s3_destination(show)
@@ -485,10 +489,14 @@ def download_import(show, template, review_titles=None, review_optional=None, re
         from .models import chapter_filename
         generated = ["chapters/" + chapter_filename(e["guid"]) for e in episodes if e.get("chapters")]
         generated += ["transcripts/" + chapter_filename(e["guid"]) + ".vtt" for e in episodes if e.get("_transcript_vtt")]
+        collisions = []
         for relative in set(files + generated):
             target = assets / relative
             if target.exists() or any(p.is_symlink() for p in (target, *target.parents)):
-                raise ValueError(f"Asset destination already exists or uses symbolic links: {target}")
+                collisions.append(str(target))
+        if collisions:
+            raise ValueError("Asset destination already exists or uses symbolic links: "
+                             + "; ".join(sorted(collisions)))
         show = dict(show, output_dir=str(output), import_url_map=mapping, asset_files=files)
         show["artwork_url"] = mapping.get(show["artwork_url"], show["artwork_url"])
         from .feed import render_feed

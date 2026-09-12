@@ -111,7 +111,8 @@ def test_import_archive_refuses_an_existing_feed(tmp_path):
         import_archive(show, manifest)
 
 
-def test_import_archive_overwrite_replaces_a_previous_import(tmp_path):
+def test_import_archive_overwrite_leaves_unrelated_files_alone(tmp_path):
+    """Overwrite must not delete files it didn't create, e.g. a real images/ folder."""
     manifest = make_archive(tmp_path)
     identity = archive_identity(manifest)
     show = new_show(**identity)
@@ -119,13 +120,26 @@ def test_import_archive_overwrite_replaces_a_previous_import(tmp_path):
     show["output_dir"] = str(tmp_path / "out")
     show["base_url"] = "https://new.example.org/show"
     out = tmp_path / "out"
-    (out / "audio").mkdir(parents=True)
+    (out / "images").mkdir(parents=True)
     (out / "feed.xml").write_text("stale")
-    (out / "audio" / "leftover.mp3").write_bytes(b"old")
+    (out / "images" / "unrelated.jpg").write_bytes(b"not ours")
     show, episodes, template = import_archive(show, manifest, overwrite=True)
     assert len(episodes) == 1
     assert (out / "audio" / "ep1.mp3").is_file()
-    assert not (out / "audio" / "leftover.mp3").exists()
+    assert (out / "images" / "unrelated.jpg").is_file()
+
+
+def test_import_archive_overwrite_reports_a_genuine_collision(tmp_path):
+    """Re-importing the same feed collides on the same content-hash filename."""
+    manifest = make_archive(tmp_path)
+    identity = archive_identity(manifest)
+    show = new_show(**identity)
+    show.update(identity)
+    show["output_dir"] = str(tmp_path / "out")
+    show["base_url"] = "https://new.example.org/show"
+    import_archive(show, manifest)
+    with pytest.raises(ValueError, match="audio/ep1.mp3"):
+        import_archive(show, manifest, overwrite=True)
 
 
 def test_archive_feed_writes_manifest(tmp_path, monkeypatch):

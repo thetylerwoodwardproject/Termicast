@@ -323,8 +323,9 @@ def _pick_output_dir(destination):
         if not feed_path.exists() and not feed_path.is_symlink():
             return False
         action = menu(f"{feed_path} already exists",
-                      ["Overwrite it (deletes the existing feed.xml and managed "
-                       "audio/images/transcripts/chapters)",
+                      ["Overwrite it (replaces the existing feed.xml; any asset "
+                       "filename that collides with a new one is reported, not "
+                       "deleted)",
                        "Choose a different directory", "Cancel import"], 2)
         if action == 1:
             return True
