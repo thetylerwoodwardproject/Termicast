@@ -284,39 +284,37 @@ Under **4. Hosting** in your show's menu:
 | **5/6. Nginx/Apache snippet** | A paste-in MIME-type config for your web server |
 | **7. S3 write-access policy** | A paste-in AWS IAM policy granting exactly the S3 access Termicast needs |
 | **8. Migration guidance** | Instructions for switching from another host |
-| **10. Correct host MIME types** | Detect local Nginx/Apache tools, edit a site configuration, validate, and optionally reload and recheck |
+| **10. Correct host MIME types** | Detect local Nginx/Apache tools, add the podcast MIME mappings automatically, validate, and optionally reload and recheck |
 
 When the interactive Hosting checks or Deploy action reports incorrect MIME types,
 including `termicast deploy <show-id>` in a terminal,
-Termicast offers **Correct host MIME types** directly. This is a guided repair:
-select the installed server and the active site configuration serving your podcast.
-Termicast displays the MIME mappings and opens `$VISUAL`, `$EDITOR`, or `vi` so you
-can apply them in the correct directory/location block. Scope chapter JSON mappings
-to `chapters/` when the site also serves ordinary JSON; preserve existing Nginx MIME
-mappings instead of adding a duplicate `types` block.
+Termicast offers **Correct host MIME types** directly. Select the installed server
+and the site configuration serving your podcast, and Termicast shows the mapping
+block in a panel and applies it automatically: it backs up the file, inserts the
+block into the server/Directory block, validates the syntax, and asks before
+reloading. If you decline — or Termicast cannot find a server block to patch — it
+prints the exact block in a panel to paste in with `nano`. Scope chapter JSON
+mappings to `chapters/` if the site also serves ordinary JSON.
 
 To open the repair directly, run `termicast fix-host-mime <show-id>` on the
 web-server host in an interactive terminal. Rerun `termicast deploy <show-id>`
 afterwards: correcting server headers does not automatically finish a failed
 deployment. Unattended deployments print the command without prompting.
 
-The selected server's default configuration is tested before and after the edit.
 Termicast keeps a private backup outside server include directories, restores the
-selected file if editing or validation fails, and asks before reloading. After a
-reload it runs public hosting checks again. The displayed backup is in a temporary
-directory; copy it elsewhere if you need long-term retention. Only the selected
-file is backed up.
+selected file if validation fails, and asks before reloading. After a reload it runs
+public hosting checks again. The displayed backup is in a temporary directory; copy
+it elsewhere if you need long-term retention. Only the selected file is backed up.
 
 Validation and reload must run as root — they read TLS private keys that Let's
-Encrypt keeps root-only and signal a root-owned master process. Termicast
-therefore runs those commands with `sudo` when it is not already root (and opens
-the editor with `sudo` too when the config file is not writable by your account).
-You will be prompted for your sudo password. If `sudo` is not installed, run
-`sudo termicast fix-host-mime <show-id>` instead. Custom server configurations
-or container-managed servers should be corrected through their deployment tooling.
+Encrypt keeps root-only and signal a root-owned master process. Termicast therefore
+runs those commands with `sudo` when it is not already root. You will be prompted
+for your sudo password. If `sudo` is not installed, run
+`sudo termicast fix-host-mime <show-id>` instead. Custom server configurations or
+container-managed servers should be corrected through their deployment tooling.
 
 Finding a server executable does not prove it serves the public URL. Confirm the
-site before editing. S3/CDN media headers may require object metadata or CDN fixes;
+site before applying. S3/CDN media headers may require object metadata or CDN fixes;
 the canonical feed on the local web server can still use this repair flow.
 
 **Local hosting** is simplest: your web server serves everything — feed and

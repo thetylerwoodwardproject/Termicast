@@ -1053,10 +1053,10 @@ def edit_episode_form(db, show, publisher, saved):
 
 
 def correct_host_mime(db, show):
-    """Guide an explicit local-server edit, syntax check, reload and verification."""
+    """Apply podcast MIME types to the site config, with a paste fallback."""
     from urllib.parse import urlsplit
-    from .serverfix import detect_servers, edit_site_config, reload_server
-    from .hosting import nginx_snippet, apache_snippet, doctor, summarize_verification_problems
+    from .serverfix import detect_servers, apply_mime_patch, reload_server, mime_snippet
+    from .hosting import doctor, summarize_verification_problems
     servers = detect_servers()
     if not servers:
         warning("No local Nginx or Apache control tool found. Run this correction on the "
@@ -1070,48 +1070,53 @@ def correct_host_mime(db, show):
     if show.get("hosting") == "s3":
         warning("This local correction applies to the web-hosted feed. S3/CDN media may "
                 "need object metadata or CDN changes instead.")
-    console.print("Termicast needs the path to the site configuration that serves this URL. "
-                  "Pick the file with the server block whose server_name/root match it, not "
-                  "the main nginx.conf. Common locations:", markup=False)
+    console.print("Choose the site configuration file that serves this URL (the one with its "
+                  "server_name/root, not the main nginx.conf). Common locations:", markup=False)
     if name == "Nginx":
-        console.print("  Debian/Ubuntu:  /etc/nginx/sites-available/<domain>\n"
-                      "  RHEL/Fedora:    /etc/nginx/conf.d/<domain>.conf\n"
-                      f"Find it with:     sudo grep -R -n 'server_name {domain}' "
+        console.print("  /etc/nginx/sites-available/<domain>  or  /etc/nginx/conf.d/<domain>.conf\n"
+                      f"  Find it: sudo grep -R -n 'server_name {domain}' "
                       "/etc/nginx/sites-enabled /etc/nginx/conf.d", markup=False)
     else:
-        console.print("  Debian/Ubuntu:  /etc/apache2/sites-available/<domain>.conf\n"
-                      "  RHEL/Fedora:    /etc/httpd/conf.d/<domain>.conf\n"
-                      f"Find it with:     sudo grep -R -n '{domain}' "
+        console.print("  /etc/apache2/sites-available/<domain>.conf  or  /etc/httpd/conf.d/<domain>.conf\n"
+                      f"  Find it: sudo grep -R -n '{domain}' "
                       "/etc/apache2/sites-enabled /etc/httpd/conf.d", markup=False)
-    console.print("Termicast backs up the selected file, opens it in VISUAL/EDITOR (or vi), "
-                  "and restores it if editing or validation fails. The syntax check and reload "
-                  "run as root, so Termicast uses sudo when it is not already root and your "
-                  "account will be prompted for the sudo password.", markup=False)
-    console.print(nginx_snippet(show) if name == "Nginx" else apache_snippet(show), markup=False)
-    console.print("Apply these mappings only to the podcast directory/location. Restrict the "
-                  "JSON mapping to chapters/ if other JSON is served there. For Nginx, merge "
-                  "with an existing types block rather than adding a duplicate, and preserve "
-                  "other MIME mappings. Do not change unrelated sites.", markup=False)
-    path = text("Active site configuration path", required=True)
-    if not confirm("Does this configuration serve the displayed podcast URL, and open it for correction?", False):
-        return
-    backup, changed = edit_site_config(path, servers[name])
-    console.print(f"Configuration backup: {backup}", markup=False)
-    if not changed:
-        console.print("No configuration changes were made.")
-        return
-    console.print("Configuration syntax is valid.", style=ACCENT)
+    path = text("Site configuration path", required=True)
+    snippet = mime_snippet(name)
+    console.print(Panel(snippet.rstrip(),
+                        title=f"MIME fix Termicast will add",
+                        subtitle="application/rss+xml for the feed; application/json+chapters for chapters",
+                        border_style=ACCENT, expand=False))
+    if not confirm("Apply this to the configuration automatically?", True):
+        console.print(Panel(snippet.rstrip(),
+                            title="Paste this into the server/Directory block with nano",
+                            border_style=ACCENT, expand=False))
+        console.print(f"nano {path}", markup=False)
+        return False
+    try:
+        backup, changed = apply_mime_patch(name, path, servers[name])
+    except (ValueError, RuntimeError) as exc:
+        error(f"Could not apply the MIME fix: {exc}")
+        console.print(Panel(snippet.rstrip(),
+                            title="Paste this into the server/Directory block with nano",
+                            border_style="red", expand=False))
+        console.print(f"nano {path}", markup=False)
+        return False
+    if changed:
+        console.print(f"Configuration updated. Backup: {backup}", markup=False)
+        console.print("Configuration syntax is valid.", style=ACCENT)
+    else:
+        console.print("The MIME types are already present in the configuration.")
     if not confirm(f"Reload {name} and recheck public hosting now?", True):
         console.print("Changes are saved but have not been reloaded.")
-        return
+        return bool(changed)
     reload_server(name, servers[name])
     problems = doctor(db, show["id"])
     if problems:
         for line in summarize_verification_problems(problems):
             warning(line)
-    else:
-        console.print("Public hosting checks passed after reload.", style=ACCENT)
-        return True
+        return False
+    console.print("Public hosting checks passed after reload.", style=ACCENT)
+    return True
 
 
 def hosting_menu(db, publisher, show):

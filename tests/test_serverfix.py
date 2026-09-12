@@ -120,6 +120,95 @@ def test_write_bytes_uses_sudo_when_not_writable(monkeypatch, tmp_path):
     assert cp_calls[0][3] == str(target)
 
 
+def _backups(tmp_path, monkeypatch):
+    monkeypatch.setattr(serverfix.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "backups"))
+    (tmp_path / "backups").mkdir()
+
+
+def test_mime_snippet_content():
+    assert "application/rss+xml" in serverfix.mime_snippet("Nginx")
+    assert "AddType application/json+chapters" in serverfix.mime_snippet("Apache")
+
+
+def test_insert_block_after_server_name():
+    config = (
+        "server {\n"
+        "    listen 80;\n"
+        "    server_name media.example.me;\n"
+        "    root /var/www/media;\n"
+        "}\n"
+    )
+    result = serverfix._insert_block("Nginx", config)
+    assert result is not None
+    joined = "\n".join(result)
+    assert serverfix.MIME_MARKER in joined
+    assert joined.index("server_name") < joined.index("types {") < joined.index("root")
+
+
+def test_insert_block_missing_anchor_returns_none():
+    assert serverfix._insert_block("Nginx", "http {\n    include mime.types;\n}\n") is None
+
+
+def test_apply_mime_patch_inserts_and_validates(tmp_path, monkeypatch):
+    _backups(tmp_path, monkeypatch)
+    config = tmp_path / "site.conf"
+    config.write_text("server {\n    server_name media.example.me;\n}\n")
+    control = Mock()
+    monkeypatch.setattr(serverfix, "run_control", control)
+    backup, changed = serverfix.apply_mime_patch("Nginx", config, "/usr/sbin/nginx")
+    assert changed is True
+    assert serverfix.MIME_MARKER in config.read_text()
+    control.assert_called_once_with("/usr/sbin/nginx", "-t")
+
+
+def test_apply_mime_patch_is_idempotent(tmp_path, monkeypatch):
+    _backups(tmp_path, monkeypatch)
+    config = tmp_path / "site.conf"
+    config.write_text("server {\n    server_name media.example.me;\n    # " + serverfix.MIME_MARKER + "\n}\n")
+    monkeypatch.setattr(serverfix, "run_control", Mock())
+    backup, changed = serverfix.apply_mime_patch("Nginx", config, "/usr/sbin/nginx")
+    assert changed is False
+    assert backup is None
+
+
+def test_apply_mime_patch_restores_on_validation_failure(tmp_path, monkeypatch):
+    _backups(tmp_path, monkeypatch)
+    config = tmp_path / "site.conf"
+    original = "server {\n    server_name media.example.me;\n}\n"
+    config.write_text(original)
+    monkeypatch.setattr(serverfix, "run_control", Mock(side_effect=RuntimeError("bad syntax")))
+    with pytest.raises(RuntimeError, match="restored after failed validation"):
+        serverfix.apply_mime_patch("Nginx", config, "/usr/sbin/nginx")
+    assert config.read_text() == original
+
+
+def test_apply_mime_patch_raises_without_server_block(tmp_path, monkeypatch):
+    _backups(tmp_path, monkeypatch)
+    config = tmp_path / "site.conf"
+    config.write_text("http {\n    include mime.types;\n}\n")
+    monkeypatch.setattr(serverfix, "run_control", Mock())
+    with pytest.raises(ValueError, match="Could not find a server block"):
+        serverfix.apply_mime_patch("Nginx", config, "/usr/sbin/nginx")
+    assert serverfix.MIME_MARKER not in config.read_text()
+
+
+def test_correct_host_mime_applies_patch_automatically(monkeypatch):
+    from termicast import hosting, prompts
+    monkeypatch.setattr(serverfix, "detect_servers", lambda: {"Nginx": "/usr/sbin/nginx"})
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: 1)
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: "/etc/nginx/sites-available/site")
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: True)
+    applied = []
+    monkeypatch.setattr(serverfix, "apply_mime_patch",
+                        lambda name, path, exe: applied.append(path) or (Mock(), True))
+    monkeypatch.setattr(serverfix, "reload_server", Mock())
+    monkeypatch.setattr(hosting, "doctor", lambda *a: [])
+    show = {"id": "001", "base_url": "https://media.example.me",
+            "output_dir": "/var/www/site", "hosting": "local"}
+    assert prompts.correct_host_mime(Mock(), show) is True
+    assert applied == ["/etc/nginx/sites-available/site"]
+
+
 @pytest.mark.parametrize("action", [2, 4])
 def test_hosting_offers_correction_after_mime_failure(monkeypatch, action):
     from termicast import hosting, prompts
