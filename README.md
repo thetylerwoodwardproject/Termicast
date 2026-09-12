@@ -36,6 +36,10 @@ either to a local web server or to S3-compatible object storage.
 ## 🚀 Quickstart
 
 ```sh
+# Get the project onto your system
+git clone https://github.com/thetylerwoodwardproject/Termicast.git termicast
+cd termicast
+
 sudo apt install python3 python3-venv ffmpeg
 python3 -m venv .venv
 . .venv/bin/activate

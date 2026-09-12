@@ -48,9 +48,19 @@ address. You can manage several shows at once.
 
 You need a Linux server with Python 3.11+ and FFmpeg.
 
+First, copy the project onto your computer. If you don't have `git`, install it
+with `sudo apt install git`, then run:
+
+```sh
+git clone https://github.com/thetylerwoodwardproject/Termicast.git termicast
+cd termicast
+```
+
+This creates a folder called `termicast` and downloads the program into it.
+Then install everything it needs:
+
 ```sh
 sudo apt install python3 python3-venv ffmpeg
-cd /opt/termicast
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
