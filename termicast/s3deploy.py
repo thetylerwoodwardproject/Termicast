@@ -9,6 +9,7 @@ are never treated as ordinary MD5 hashes.
 import configparser
 import io
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,20 @@ S3_SECRET_KEY_ENV = "S3_SECRET_KEY"
 SINGLEPART_LIMIT = 64 * 1024 * 1024
 MULTIPART_SPLIT = 16 * 1024 * 1024
 NUM_THREADS = 2
+
+# Bounded timeout for preflight subprocesses (list, probe, delete). Real
+# uploads of large media keep no timeout.
+S3_CMD_TIMEOUT = 60
+
+
+def _run(args, timeout=None):
+    """Run s4cmd, converting a hang into an actionable RuntimeError."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        command = args[1] if len(args) > 1 else args[0]
+        raise RuntimeError(f"s4cmd {command} timed out after {timeout} seconds") from exc
 
 
 def s3cfg_path():
@@ -103,7 +118,7 @@ def s4cmd_args(show, content_type):
     return args
 
 
-def upload_file(show, local_path, remote_relative, dry_run=False):
+def upload_file(show, local_path, remote_relative, dry_run=False, timeout=None):
     """Upload one file with an explicit Content-Type; skip unchanged objects.
 
     A dry run performs no upload and no bucket probe.
@@ -120,7 +135,7 @@ def upload_file(show, local_path, remote_relative, dry_run=False):
         return
     args = s4cmd_args(show, content_type) + [
         str(local_path), f"s3://{show['bucket']}/{object_key(show, remote_relative)}"]
-    process = subprocess.run(args, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    process = _run(args, timeout=timeout)
     if process.returncode != 0:
         message = process.stderr.strip() or process.stdout.strip()
         raise RuntimeError(
@@ -201,7 +216,69 @@ def remote_rename(show, old_relative, new_relative):
             f"{process.stderr.strip() or process.stdout.strip()}") from None
 
 
-WRITE_PROBE_RELATIVE = ".termicast-write-check.txt"
+WRITE_PROBE_PREFIX = ".termicast-write-check-"
+
+
+def _list_destination(show):
+    """Return the raw `s4cmd ls` result for the show's bucket/prefix."""
+    key = object_key(show, "")
+    args = [s4cmd_path(), "ls"]
+    if show.get("endpoint_url"):
+        args += ["--endpoint-url", show["endpoint_url"]]
+    args.append(f"s3://{show['bucket']}/{key}")
+    try:
+        return _run(args, timeout=S3_CMD_TIMEOUT)
+    except FileNotFoundError:
+        raise RuntimeError("s4cmd is required to check the S3 destination; install it and retry") from None
+
+
+def _ensure_empty_destination(show):
+    """Reject a destination whose listing fails or that already holds objects.
+
+    A nonempty listing means the prefix is in use; a failed listing is reported
+    as a connection/authentication/permission problem rather than silently
+    treated as an empty destination.
+    """
+    process = _list_destination(show)
+    if process.returncode != 0:
+        message = process.stderr.strip() or process.stdout.strip()
+        raise RuntimeError(
+            f"Could not list the S3 destination to confirm it is empty: {message}"
+            f"{_permission_help(show, message)}") from None
+    if process.stdout.strip():
+        raise ValueError("S3 destination already contains objects; choose an unused show prefix")
+
+
+def _delete_probe(show, probe_relative):
+    """Remove the exact probe object created by this invocation, if any."""
+    remote = f"s3://{show['bucket']}/{object_key(show, probe_relative)}"
+    args = [s4cmd_path(), "del"]
+    if show.get("endpoint_url"):
+        args += ["--endpoint-url", show["endpoint_url"]]
+    args.append(remote)
+    process = _run(args, timeout=S3_CMD_TIMEOUT)
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"Uploaded a write-access probe object but could not remove it ({remote}); "
+            f"delete it manually: {process.stderr.strip() or process.stdout.strip()}")
+
+
+def _check_write_access(show):
+    """Probe write and delete access using a unique, prefix-scoped object.
+
+    The probe object name is unique per attempt so concurrent or repeated
+    checks never collide with one another, and cleanup targets only the exact
+    object this invocation created.
+    """
+    probe_relative = f"{WRITE_PROBE_PREFIX}{secrets.token_hex(8)}.txt"
+    with tempfile.TemporaryDirectory() as tmp:
+        probe_path = Path(tmp) / "probe.txt"
+        probe_path.write_bytes(b"termicast write check\n")
+        try:
+            upload_file(show, probe_path, probe_relative, timeout=S3_CMD_TIMEOUT)
+        except (ValueError, RuntimeError) as exc:
+            raise RuntimeError(f"S3 destination is listable but not writable: {exc}") from None
+    _delete_probe(show, probe_relative)
 
 
 def check_s3_destination(show):
@@ -210,37 +287,24 @@ def check_s3_destination(show):
 
     Listing can succeed with read-only credentials while every later
     PutObject is denied, so a probe upload+delete catches that mismatch here
-    instead of partway through a deploy.
+    instead of partway through a deploy. A failed listing is reported as a
+    connection/authentication/permission error rather than ignored.
     """
-    key = object_key(show, "")
-    args = [s4cmd_path(), "ls"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(f"s3://{show['bucket']}/{key}")
-    try:
-        process = subprocess.run(args, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    except FileNotFoundError:
-        raise RuntimeError("s4cmd is required to check the S3 destination; install it and retry") from None
-    if process.returncode == 0 and process.stdout.strip():
-        raise ValueError("S3 destination already contains objects; choose an unused show prefix")
+    _ensure_empty_destination(show)
     _check_write_access(show)
 
 
-def _check_write_access(show):
-    with tempfile.TemporaryDirectory() as tmp:
-        probe_path = Path(tmp) / "probe.txt"
-        probe_path.write_bytes(b"termicast write check\n")
-        try:
-            upload_file(show, probe_path, WRITE_PROBE_RELATIVE)
-        except (ValueError, RuntimeError) as exc:
-            raise RuntimeError(f"S3 destination is listable but not writable: {exc}") from None
-    remote = f"s3://{show['bucket']}/{object_key(show, WRITE_PROBE_RELATIVE)}"
-    args = [s4cmd_path(), "del"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(remote)
-    process = subprocess.run(args, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    if process.returncode != 0:
+def check_s3_access(show):
+    """Non-mutating preflight: fail fast on missing tooling or credentials.
+
+    Unlike an import (`check_s3_destination`), an existing show may already
+    hold objects and its upload path needs only PutObject, so no listing,
+    write probe, or delete probe is attempted here. The actual upload remains
+    the definitive write test; this only catches the most common hard failures
+    (no s4cmd, no credentials) before asset generation or upload begins.
+    """
+    s4cmd_path()
+    if not s3_credentials_present():
         raise RuntimeError(
-            f"Uploaded a write-access probe object but could not remove it ({remote}); "
-            f"delete it manually: {process.stderr.strip() or process.stdout.strip()}")
+            f"S3 credentials are not configured; expected them in {s3cfg_path()} "
+            "(or via S3_ACCESS_KEY/S3_SECRET_KEY). Configure hosting first.")

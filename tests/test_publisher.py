@@ -8,6 +8,13 @@ from termicast.publisher import Publisher
 from termicast.models import new_episode
 
 
+@pytest.fixture(autouse=True)
+def _no_s3_access_check(monkeypatch):
+    """Neutralize the S3 access preflight; tests assert on deploy_paths instead."""
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "check_s3_access", lambda show: None)
+
+
 def make_episode(**kwargs):
     return new_episode(
         title="Ep", description="desc", mp3_url="https://example.org/show/audio/e1.mp3",
@@ -277,3 +284,62 @@ def test_s3_deploy_no_verify_suppresses_checks(db, show, monkeypatch):
                         lambda s, paths, dry_run=False, verify=True: verifies.append(verify) or list(paths))
     Publisher(db).deploy(show["id"], verify=False)
     assert verifies == [False, False]
+
+
+def test_s3_deploy_preflights_access_before_upload(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    from termicast import s3deploy
+    checks = []
+    monkeypatch.setattr(s3deploy, "check_s3_access", lambda s: checks.append(s) or None)
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
+    Publisher(db).deploy(show["id"], verify=False)
+    assert len(checks) == 1
+    assert checks[0]["hosting"] == "s3"
+
+
+def test_s3_deploy_access_failure_aborts_before_upload(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "check_s3_access",
+                        lambda s: (_ for _ in ()).throw(RuntimeError("no credentials")))
+    uploads = []
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: uploads.append(paths) or list(paths))
+    with pytest.raises(RuntimeError, match="no credentials"):
+        Publisher(db).deploy(show["id"], verify=False)
+    assert uploads == []
+
+
+def test_s3_deploy_dry_run_skips_access_preflight(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, mirror_feed=True, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    from termicast import s3deploy
+    checks = []
+    monkeypatch.setattr(s3deploy, "check_s3_access", lambda s: checks.append(s) or None)
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
+    Publisher(db).deploy(show["id"], dry_run=True)
+    assert checks == []
+
+
+def test_s3_publish_preflights_access_before_upload(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, keep_local_media=True)
+    db.save_show(show)
+    _write_local_audio(show)
+    from termicast import s3deploy
+    checks = []
+    monkeypatch.setattr(s3deploy, "check_s3_access", lambda s: checks.append(s) or None)
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
+    Publisher(db).publish(show["id"], make_episode())
+    assert len(checks) == 1

@@ -284,6 +284,28 @@ Under **4. Hosting** in your show's menu:
 | **5/6. Nginx/Apache snippet** | A paste-in MIME-type config for your web server |
 | **7. S3 write-access policy** | A paste-in AWS IAM policy granting exactly the S3 access Termicast needs |
 | **8. Migration guidance** | Instructions for switching from another host |
+| **10. Correct host MIME types** | Detect local Nginx/Apache tools, edit a site configuration, validate, and optionally reload and recheck |
+
+When the interactive Hosting checks or Deploy action reports incorrect MIME types,
+Termicast offers **Correct host MIME types** directly. This is a guided repair:
+select the installed server and the active site configuration serving your podcast.
+Termicast displays the MIME mappings and opens `$VISUAL`, `$EDITOR`, or `vi` so you
+can apply them in the correct directory/location block. Scope chapter JSON mappings
+to `chapters/` when the site also serves ordinary JSON; preserve existing Nginx MIME
+mappings instead of adding a duplicate `types` block.
+
+The selected server's default configuration is tested before and after the edit.
+Termicast keeps a private backup outside server include directories, restores the
+selected file if editing or validation fails, and asks before reloading. After a
+reload it runs public hosting checks again. The displayed backup is in a temporary
+directory; copy it elsewhere if you need long-term retention. Only the selected
+file is backed up. Use an account with the required file and server-control
+permissions; Termicast does not invoke sudo. Custom server configurations or
+container-managed servers should be corrected through their deployment tooling.
+
+Finding a server executable does not prove it serves the public URL. Confirm the
+site before editing. S3/CDN media headers may require object metadata or CDN fixes;
+the canonical feed on the local web server can still use this repair flow.
 
 **Local hosting** is simplest: your web server serves everything — feed and
 media — from the output folder.
@@ -319,10 +341,18 @@ files. You'll set two addresses:
 > Termicast checks that your credentials can both list *and write to* the
 > bucket before it lets you continue — a key that can only list or read is a
 > common source of confusing "Access Denied" errors partway through an
-> import. If a check fails, or an upload is denied later, Termicast prints a
-> ready-to-paste fix: an AWS IAM policy scoped to exactly the access it
-> needs, or a checklist for other providers. You can also pull that policy
-> up any time from **Hosting → S3 write-access policy**.
+> import. It checks the destination is empty, then uploads and removes a
+> small, uniquely named test object; a bucket that can't even be listed (wrong
+> endpoint, missing or revoked credentials) is reported right away rather than
+> treated as an empty destination. If a check fails, or an upload is denied
+> later, Termicast prints a ready-to-paste fix: an AWS IAM policy scoped to
+> exactly the access it needs, or a checklist for other providers. You can also
+> pull that policy up any time from **Hosting → S3 write-access policy**.
+
+For an existing podcast, `deploy` and automatic publishing run a lighter
+preflight first: missing `s4cmd` or credentials are caught before any upload
+starts, without requiring an empty prefix or delete permission. The actual
+upload remains the final test of write access.
 
 When setting up S3, you'll also be asked **"Automatically deploy on
 publish/schedule?"**, **"Keep a local copy of media after it's uploaded to

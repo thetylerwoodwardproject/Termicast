@@ -232,6 +232,11 @@ class Publisher:
             if show.get("hosting") == "s3":
                 if show.get("mirror_feed") and not (asset_root(show) / "feed.xml").is_file():
                     raise ValueError("No local feed.xml to deploy; publish or regenerate first")
+                root = asset_root(show)
+                if not dry_run and (any((root / relative).is_file() for relative in assets)
+                                    or (show.get("mirror_feed") and (root / "feed.xml").is_file())):
+                    from .s3deploy import check_s3_access
+                    check_s3_access(show)
                 uploaded = upload_existing_assets(show, sorted(assets), dry_run=dry_run, verify=verify)
                 if show.get("mirror_feed"):
                     uploaded = list(uploaded) + list(mirror_feed(show, dry_run=dry_run, verify=verify))
@@ -317,6 +322,10 @@ class Publisher:
         for episode in snapshot["episodes"]:
             paths |= episode_asset_paths(episode)
         try:
+            from .s3deploy import check_s3_access
+            root = asset_root(show)
+            if any((root / relative).is_file() for relative in paths):
+                check_s3_access(show)
             upload_existing_assets(show, sorted(paths))
         except Exception as exc:
             raise RuntimeError(

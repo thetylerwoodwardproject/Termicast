@@ -306,13 +306,13 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
     for root_path in (output, assets):
         if any(p.is_symlink() for p in (root_path, *root_path.parents)):
             raise ValueError("Import destinations must not use symbolic links")
+    if show.get("hosting") == "s3":
+        from .s3deploy import check_s3_destination
+        check_s3_destination(show)
     if (output / "feed.xml").exists() or (output / "feed.xml").is_symlink():
         if not overwrite:
             raise ValueError("Destination feed.xml already exists")
         _clear_previous_import(output)
-    if show.get("hosting") == "s3":
-        from .s3deploy import check_s3_destination
-        check_s3_destination(show)
     output.parent.mkdir(parents=True, exist_ok=True)
     root = _parse_xml(template)
     mapping, local_paths, metadata = {}, {}, {}

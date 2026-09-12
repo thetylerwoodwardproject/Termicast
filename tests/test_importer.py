@@ -97,6 +97,24 @@ def test_artwork_auto_mode_is_per_import(tmp_path, monkeypatch):
     assert len(prompts) == 2
 
 
+def test_download_import_checks_s3_before_clearing_previous_import(tmp_path, monkeypatch):
+    from termicast import importer, s3deploy
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "feed.xml").write_text("<old/>")
+    show = new_show(title="S", description="d", base_url="https://e.org/show",
+                    output_dir=str(output), hosting="s3", bucket="b", prefix="p",
+                    asset_base_url="https://cdn.e.org/show")
+    cleared = []
+    monkeypatch.setattr(importer, "_clear_previous_import", lambda o: cleared.append(o))
+    monkeypatch.setattr(s3deploy, "check_s3_destination",
+                        lambda s: (_ for _ in ()).throw(RuntimeError("s3 boom")))
+    template = b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>'
+    with pytest.raises(RuntimeError, match="s3 boom"):
+        importer.download_import(show, template, overwrite=True)
+    assert cleared == []
+
+
 def test_rgb_artwork_is_preserved(tmp_path):
     from termicast.importer import _convert_import_artwork
 

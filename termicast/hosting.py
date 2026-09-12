@@ -62,7 +62,9 @@ _MIME_MARKERS = ("Unexpected Content-Type ", "Missing Content-Type ")
 _MIME_GUIDANCE = {
     "local": (
         "Content-Type mismatches usually mean the web server is serving the wrong MIME "
-        "types. Apply the fix from Termicast → Open podcast → Hosting → Nginx MIME snippet "
+        "types. Use Termicast → Open podcast → Hosting → Correct host MIME types for "
+        "host detection, a guided configuration edit, syntax validation, and reload. "
+        "Or apply the fix from Hosting → Nginx MIME snippet "
         "(or Apache MIME snippet) to the server/location block that serves the failing URL, "
         "then reload the server."
     ),
@@ -75,7 +77,8 @@ _MIME_GUIDANCE = {
     ),
     "mixed": (
         "If the failing URL is served by your web server, apply the fix from Termicast → Open "
-        "podcast → Hosting → Nginx MIME snippet (or Apache MIME snippet) and reload the server. "
+        "podcast → Hosting → Correct host MIME types, or use the Nginx MIME snippet "
+        "(or Apache MIME snippet) and reload the server. "
         "If it is an S3/CDN URL, uploads already set Content-Type: inspect object metadata and "
         "any CDN/proxy overrides or cached headers for that URL instead."
     ),

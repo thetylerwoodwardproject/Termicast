@@ -223,9 +223,12 @@ alone rather than overwritten, since it may hold other hand-edited settings.
 
 Configuring S3 hosting verifies the destination is both listable and
 *writable* before continuing (`check_s3_destination()` in `s3deploy.py`
-uploads and deletes a small probe object) — a set of credentials that can
-list a bucket but not write to it is a common misconfiguration, and this
-catches it at setup instead of partway through a deploy. If an upload later
+lists the prefix, then uploads and deletes a small, uniquely named probe
+object) — a set of credentials that can list a bucket but not write to it is a
+common misconfiguration, and this catches it at setup instead of partway
+through a deploy. A listing that fails outright (bad endpoint, missing or
+revoked credentials, no list permission) is reported as such rather than
+silently treated as an empty destination. If an upload later
 fails with an access-denied error, Termicast appends a ready-to-use fix to
 the error: a scoped IAM policy JSON for AWS buckets, or a permissions
 checklist for other S3-compatible providers. That same policy is available
@@ -256,9 +259,25 @@ references a missing file. Deployment uses one `s4cmd` subprocess at a time
 Content-Types, skips unchanged objects via s4cmd's checksum metadata, and never
 deletes remote objects automatically.
 
+For guided local web-server MIME repairs, open **Hosting → Correct host MIME types**.
+Termicast detects Nginx/Apache control tools, displays the required mappings, opens
+your selected site configuration in your terminal editor, backs it up, validates
+syntax, and offers a reload followed by public verification. Interactive Hosting
+checks and failed deployments also offer this flow when MIME mismatches occur.
+See `USER_GUIDE.md` for configuration scope and permissions.
+
 `doctor` is read-only and checks tools, public feed/media accessibility, MIME
 types, and local-versus-remote feed content. `deploy --dry-run` performs no
 uploads or bucket probes.
+
+Before an import stages any media, Termicast verifies the S3 destination is
+empty, writable, and deletable (via a short-lived, uniquely named probe object
+that is removed again). Imports also run this check before touching a previous
+`feed.xml`, so a bad endpoint, bucket, or credential fails early rather than at
+the end of the whole process. For existing podcasts, `deploy` and automatic
+publishing run a non-mutating preflight — missing `s4cmd` or credentials are
+caught before uploads begin — without requiring an empty prefix or delete
+permission. The actual upload remains the definitive write test.
 
 When verification finds Content-Type problems, Termicast caps the repeated
 diagnostics to a handful of samples (with an exact omitted count) and points at

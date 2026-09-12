@@ -1052,6 +1052,53 @@ def edit_episode_form(db, show, publisher, saved):
         return
 
 
+def correct_host_mime(db, show):
+    """Guide an explicit local-server edit, syntax check, reload and verification."""
+    from .serverfix import detect_servers, edit_site_config, reload_server
+    from .hosting import nginx_snippet, apache_snippet, doctor, summarize_verification_problems
+    servers = detect_servers()
+    if not servers:
+        warning("No local Nginx or Apache control tool found. Run this correction on the "
+                "web-server host; for S3/CDN media, correct object metadata or CDN headers.")
+        return
+    names = list(servers)
+    name = names[menu("Detected web-server tools", names) - 1]
+    console.print(f"Public feed: {show['base_url']}/feed.xml", markup=False)
+    console.print(f"Local output directory: {show['output_dir']}", markup=False)
+    if show.get("hosting") == "s3":
+        warning("This local correction applies to the web-hosted feed. S3/CDN media may "
+                "need object metadata or CDN changes instead.")
+    console.print("Installed tools do not identify the server serving this URL. Select the "
+                  "active site configuration included by this server's default configuration. "
+                  "Termicast will open your VISUAL/EDITOR (or vi), back up the selected file, "
+                  "and restore it if editing or syntax validation fails. The current account "
+                  "needs permission to edit the file and control the server.", markup=False)
+    console.print(nginx_snippet(show) if name == "Nginx" else apache_snippet(show), markup=False)
+    console.print("Apply these mappings only to the podcast directory/location. Restrict the "
+                  "JSON mapping to chapters/ if other JSON is served there. For Nginx, merge "
+                  "with an existing types block rather than adding a duplicate, and preserve "
+                  "other MIME mappings. Do not change unrelated sites.", markup=False)
+    path = text("Active site configuration path", required=True)
+    if not confirm("Does this configuration serve the displayed podcast URL, and open it for correction?", False):
+        return
+    backup, changed = edit_site_config(path, servers[name])
+    console.print(f"Configuration backup: {backup}", markup=False)
+    if not changed:
+        console.print("No configuration changes were made.")
+        return
+    console.print("Configuration syntax is valid.", style=ACCENT)
+    if not confirm(f"Reload {name} and recheck public hosting now?", True):
+        console.print("Changes are saved but have not been reloaded.")
+        return
+    reload_server(name, servers[name])
+    problems = doctor(db, show["id"])
+    if problems:
+        for line in summarize_verification_problems(problems):
+            warning(line)
+    else:
+        console.print("Public hosting checks passed after reload.", style=ACCENT)
+
+
 def hosting_menu(db, publisher, show):
     """Hosting submenu: setup, deploy, checks, and guidance."""
     from .hosting import doctor, nginx_snippet, apache_snippet, s3_write_policy_snippet
@@ -1059,13 +1106,16 @@ def hosting_menu(db, publisher, show):
         action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
                                   "Hosting checks (doctor)", "Nginx MIME snippet",
                                   "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
-                                  "Migration guidance", "Back"])
+                                  "Migration guidance", "Back", "Correct host MIME types"])
         try:
             if action == 9:
                 return
             if action == 1:
                 data = dict(show)
                 hosting_form(data)
+                if data.get("hosting") == "s3":
+                    from .s3deploy import check_s3_access
+                    check_s3_access(data)
                 db.save_show(data)
                 publisher.regenerate(show["id"])
                 show = data
@@ -1082,6 +1132,10 @@ def hosting_menu(db, publisher, show):
                     from .hosting import summarize_verification_problems
                     for line in summarize_verification_problems(problems, target="mixed"):
                         warning(line)
+                    if any("Unexpected Content-Type " in p or "Missing Content-Type " in p
+                           for p in problems):
+                        if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
+                            correct_host_mime(db, show)
                 else:
                     console.print("No hosting problems found.", style=ACCENT)
             elif action == 5:
@@ -1096,9 +1150,19 @@ def hosting_menu(db, publisher, show):
             elif action == 8:
                 from .migration import migration_guidance
                 console.print(migration_guidance(show), markup=False)
+            elif action == 10:
+                correct_host_mime(db, show)
         except ExitRequested:
             raise
         except Cancelled:
             console.print("Cancelled. Hosting settings are unchanged.")
         except Exception as exc:
             error(f"Hosting action failed: {exc}")
+            if action == 2 and ("Unexpected Content-Type " in str(exc) or "Missing Content-Type " in str(exc)):
+                try:
+                    if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
+                        correct_host_mime(db, show)
+                except Cancelled:
+                    console.print("Correction cancelled.")
+                except Exception as repair_exc:
+                    error(f"MIME correction failed: {repair_exc}")

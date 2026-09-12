@@ -8,7 +8,7 @@ from termicast import s3deploy
 from termicast.models import new_show
 from termicast.s3deploy import (
     object_key, s4cmd_args, upload_file, deploy_paths, remote_rename, check_s3_destination,
-    s3_credentials_present, write_s3cfg,
+    check_s3_access, s3_credentials_present, write_s3cfg,
 )
 
 
@@ -195,6 +195,47 @@ def test_check_s3_destination_warns_when_probe_cleanup_fails(tmp_path, monkeypat
     monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
     with pytest.raises(RuntimeError, match="could not remove it"):
         check_s3_destination(show)
+
+
+def test_check_s3_destination_reports_listing_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    failed = subprocess.CompletedProcess([], 1, "", "Unable to locate credentials")
+    run = Mock(return_value=failed)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="Could not list the S3 destination.*Unable to locate credentials"):
+        check_s3_destination(show)
+    assert run.call_count == 1
+
+
+def test_check_s3_destination_uses_unique_probe_names(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    uploaded_keys = []
+    monkeypatch.setattr(s3deploy, "upload_file",
+                        lambda show, local, rel, dry_run=False, timeout=None: uploaded_keys.append(rel))
+    monkeypatch.setattr(s3deploy, "_run", Mock(return_value=ok))
+    check_s3_destination(show)
+    check_s3_destination(show)
+    assert len(uploaded_keys) == 2
+    assert uploaded_keys[0] != uploaded_keys[1]
+    assert all(key.startswith(".termicast-write-check-") and key.endswith(".txt")
+               for key in uploaded_keys)
+
+
+def test_check_s3_access_raises_without_credentials(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: tmp_path / "missing.s3cfg")
+    with pytest.raises(RuntimeError, match="credentials are not configured"):
+        check_s3_access(show)
+
+
+def test_check_s3_access_passes_with_credentials(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIA...")
+    monkeypatch.setenv("S3_SECRET_KEY", "shh")
+    check_s3_access(show)
 
 
 def test_deploy_paths_stops_on_failure(tmp_path, monkeypatch):
