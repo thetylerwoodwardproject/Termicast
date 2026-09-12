@@ -91,6 +91,36 @@ Extensions follow the actual output format. Slugs use ASCII letters, numbers,
 hyphens, and underscores, and must begin with a letter or number. Collisions
 with other episodes are rejected before install.
 
+## Scheduling and cron
+
+A scheduled episode stays out of the feed until `publish-due` releases it. That
+command is non-interactive and is meant to run from cron. Without it, scheduled
+episodes never go live.
+
+Run it by hand:
+
+```sh
+/opt/termicast/.venv/bin/termicast --data-dir /srv/termicast/state publish-due
+```
+
+Add a cron entry (with `crontab -e`, as the account that owns the state and
+output directories):
+
+```cron
+*/5 * * * * /opt/termicast/.venv/bin/termicast --data-dir /srv/termicast/state publish-due
+```
+
+Notes:
+
+- Use the **same `--data-dir`** for the interactive app, cron, `validate`,
+  `backup`, and recovery, or they will not see the same schedules.
+- A five-minute interval releases at the **next run**, not the exact scheduled
+  second.
+- Cron does not need venv activation; point it straight at the venv binary.
+- Omit `--data-dir` if state lives in the default `~/.local/share/termicast/`.
+- `publish-due` also retries shows left "dirty" by a previously failed
+  publication, so a transient error self-heals on the next tick.
+
 ## Hosting
 
 Each show has an output directory and a public HTTPS **base URL**. The feed file
