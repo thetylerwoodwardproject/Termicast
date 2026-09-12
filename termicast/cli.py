@@ -45,12 +45,6 @@ def _describe_action_error(exc):
     return f"Action failed: {exc}"
 
 
-def _review_titles(changes):
-    for guid, original, replacement in changes:
-        console.print(f"{guid}\nOriginal: {original}\nReplacement: {replacement}", markup=False)
-    return confirm("Save these hard-cut titles (first 60 characters, no ellipsis)?", False)
-
-
 def _artwork_reviewer():
     """Create conversion approval state scoped to a single import."""
     automatic = False
@@ -156,17 +150,9 @@ def _check_repair(db, show):
     console.print("Scan is offline. Absent optional chapters/transcripts are not errors.", markup=False)
     for issue in scan["issues"]:
         warning(issue)
-    fixes = scan["fixes"]
-    for fix in fixes:
-        console.print(f"{fix['guid']}\nOriginal: {fix['original']}\nReplacement: {fix['replacement']}", markup=False)
-    action = menu("Check And Repair", ["All safe title fixes and regenerate", "Select title fixes and regenerate", "Regenerate only", "Cancel"], 4)
-    if action == 4:
-        return
-    selected = [f["guid"] for f in fixes] if action == 1 else []
+    action = menu("Check And Repair", ["Regenerate", "Cancel"], 2)
     if action == 2:
-        for fix in fixes:
-            if confirm(f"Apply previewed title fix for {fix['guid']}?", False):
-                selected.append(fix["guid"])
+        return
     output_dir = None
     if confirm("Correct output directory to a NEW path? Existing media will need copying separately.", False):
         output_dir = str(Path(text("New output directory", required=True)).expanduser().absolute())
@@ -182,13 +168,13 @@ def _check_repair(db, show):
         from .storage import asset_root, asset_base
         relative = Path(target).relative_to(asset_root(show))
         console.print(f"Copy {source} -> {asset_root(show) / relative}\nURL: {asset_base(show)}/{relative.as_posix()}", markup=False)
-    if not confirm("Back up saved state/feeds/chapters, apply selected fixes and regenerate WITHOUT releasing scheduled episodes?", False):
+    if not confirm("Back up saved state/feeds/chapters and regenerate WITHOUT releasing scheduled episodes?", False):
         return
-    backup, result = repair_show(db, scan, selected, recoveries, output_dir)
+    backup, result = repair_show(db, scan, recoveries, output_dir)
     console.print(f"Backup: {backup}", markup=False)
     for issue in result["issues"]:
         warning(issue)
-    console.print(f"Repair complete: {len(selected)} title fixes; {len(recoveries)} local files recovered; {len(result['issues'])} remaining issues.", markup=False)
+    console.print(f"Repair complete: {len(recoveries)} local files recovered; {len(result['issues'])} remaining issues.", markup=False)
 
 
 def _backup(db, destination=None, include_media=False):
@@ -285,7 +271,7 @@ def _tool_action(db, publisher, show, action):
     elif action == 3:
         path = text("CSV path (merge; no episodes deleted)", required=True)
         if confirm("Preflight and merge this CSV?", False):
-            count = import_csv(db, show["id"], path, review_titles=_review_titles)
+            count = import_csv(db, show["id"], path)
             console.print(f"Merged {count} episodes.", style=ACCENT)
     elif action == 4:
         selection = ("all", "published", "scheduled")[menu("Export episodes", ["All", "Published", "Scheduled"]) - 1]
@@ -421,7 +407,7 @@ def _create_or_import(db, publisher, importing=False):
                 return
             from .importer import extract_episodes
             scheme, fallback = _choose_naming(extract_episodes(template), show)
-            show, episodes = download_import(show, template, review_titles=_review_titles,
+            show, episodes = download_import(show, template,
                                              review_optional=lambda episodes, root: _review_optional(episodes, root, show),
                                              resolve_optional=_resolve_optional,
                                              review_artwork=_artwork_reviewer(),
@@ -583,7 +569,7 @@ def main(argv=None):
                           style=ACCENT)
             return 0
         if args.command == "import-csv":
-            console.print(f"Merged {import_csv(db, args.show_id, args.path, review_titles=_review_titles)} episodes.")
+            console.print(f"Merged {import_csv(db, args.show_id, args.path)} episodes.")
             return 0
         if args.command == "export-csv":
             console.print(str(export_csv(db, args.show_id, args.path, args.filter)), markup=False)

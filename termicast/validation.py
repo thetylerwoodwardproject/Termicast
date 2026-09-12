@@ -128,7 +128,7 @@ def _fields(record, limits, required, urls):
         value = record.get(field, "")
         if not isinstance(value, str):
             errors.append(f"{field} must be text")
-        elif len(value) > limit:
+        elif limit is not None and len(value) > limit:
             errors.append(f"{field} must be at most {limit} characters")
         elif field in required and not value.strip():
             errors.append(f"{field} is required")
@@ -213,7 +213,7 @@ def validate_episode(episode) -> list[str]:
     if not isinstance(episode, dict):
         return ["episode must be a dictionary"]
     urls = ("link", "mp3_url", "artwork_url", "transcript_url")
-    errors = _fields(episode, {"title": 60, "description": 4000, **dict.fromkeys(urls, 2048)},
+    errors = _fields(episode, {"title": None, "description": 4000, **dict.fromkeys(urls, 2048)},
                      ("title", "description", "mp3_url"), urls)
     if not isinstance(episode.get("guid"), str) or not episode["guid"].strip() or any(ord(c) < 32 for c in episode["guid"]):
         errors.append("guid must be nonempty text without control characters")

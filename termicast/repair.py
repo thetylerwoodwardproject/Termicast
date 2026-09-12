@@ -22,12 +22,9 @@ def scan_show(db, show_id):
         with db.connection() as conn:
             template = conn.execute("SELECT template FROM shows WHERE id=?", (show_id,)).fetchone()[0]
     output = Path(show["output_dir"])
-    fixes, issues, missing = [], [], []
+    issues, missing = [], []
     for episode in episodes:
         issues.extend(f"{episode['guid']}: {error}" for error in validate_episode(episode))
-        title = episode["title"]
-        if len(title) > 60:
-            fixes.append({"guid": episode["guid"], "original": title, "replacement": title[:60].rstrip()})
     try:
         issues.extend(validate_feed((output / "feed.xml").read_bytes()))
     except OSError as exc:
@@ -41,7 +38,7 @@ def scan_show(db, show_id):
                                      excluded_guids={e["guid"] for e in episodes if e["status"] != "published"}))
     except (ValueError, TypeError, KeyError) as exc:
         issues.append(f"Cannot regenerate from saved data: {exc}")
-        return {"show": show, "episodes": episodes, "template": template, "fixes": fixes,
+        return {"show": show, "episodes": episodes, "template": template,
                 "issues": issues, "missing": missing}
     for element in root.iter():
         if element.tag not in ("enclosure", _tag("podcast:chapters"), _tag("podcast:transcript"), _tag("itunes:image")):
@@ -63,14 +60,13 @@ def scan_show(db, show_id):
     for episode in published:
         if episode.get("chapters") and not (assets / chapters_relative(episode)).is_file():
             issues.append(f"Saved chapters can be regenerated: {episode['guid']}")
-    return {"show": show, "episodes": episodes, "template": template, "fixes": fixes,
+    return {"show": show, "episodes": episodes, "template": template,
             "issues": issues, "missing": missing}
 
 
-def repair_show(db, scan, selected, recoveries=None, output_dir=None):
-    """Apply selected previewed title fixes and rebuild only published content."""
+def repair_show(db, scan, recoveries=None, output_dir=None):
+    """Rebuild only published content, applying any supplied recoveries."""
     show = scan["show"]
-    selected = set(selected)
     recoveries = recoveries or {}
     allowed = {entry["path"] for entry in scan["missing"]}
     if set(recoveries) - allowed:
@@ -78,8 +74,6 @@ def repair_show(db, scan, selected, recoveries=None, output_dir=None):
     output = Path(output_dir or show["output_dir"]).expanduser().absolute()
     if output_dir and output.exists():
         raise ValueError("Corrected output directory must be new; existing files are not moved")
-    if selected - {f["guid"] for f in scan["fixes"]}:
-        raise ValueError("Unknown repair selection")
     # Locks are taken operation -> database -> output everywhere, so that a
     # concurrent publish-due (which takes the operation lock first) can never
     # hold one while we wait for the other. `_write` below re-reads the show and
@@ -100,15 +94,6 @@ def repair_show(db, scan, selected, recoveries=None, output_dir=None):
             raise ValueError("Source template changed; scan again")
         backup = create_backup(db, _locked=True)
         with db.connection() as conn:
-            for old in scan["episodes"]:
-                if old["guid"] not in selected:
-                    continue
-                episode = dict(old)
-                status, target = episode.pop("status"), episode.pop("publish_at")
-                episode["title"] = episode["title"][:60].rstrip()
-                conn.execute("""INSERT INTO episodes VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(show_id, guid) DO UPDATE SET data=excluded.data""",
-                    (episode["guid"], show["id"], json.dumps(episode), target, status))
             conn.execute("UPDATE shows SET dirty=1 WHERE id=?", (show["id"],))
             if output_dir:
                 updated = dict(show, output_dir=str(output))

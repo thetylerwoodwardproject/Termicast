@@ -52,7 +52,7 @@ def export_csv(db, show_id, path, selection="all"):
     return target
 
 
-def import_csv(db, show_id, path, review_titles=None):
+def import_csv(db, show_id, path):
     with Path(path).expanduser().open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         headers = reader.fieldnames or []
@@ -96,14 +96,6 @@ def import_csv(db, show_id, path, review_titles=None):
                 prepared.append(episode)
             except (ValueError, TypeError, KeyError) as exc:
                 raise ValueError(f"CSV row {number}: {exc}") from exc
-        changes = [(e["guid"], e["title"], e["title"][:60].rstrip())
-                   for e in prepared if len(e["title"]) > 60]
-        if changes:
-            if review_titles is None or not review_titles(changes):
-                raise ValueError("Overlong titles require original/replacement review and confirmation")
-            for episode in prepared:
-                if len(episode["title"]) > 60:
-                    episode["title"] = episode["title"][:60].rstrip()
         return prepared
 
     return Publisher(db).merge(show_id, preflight)

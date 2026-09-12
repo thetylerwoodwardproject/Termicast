@@ -313,7 +313,7 @@ def validate_feed(data: bytes) -> list[str]:
         seen.add(guid)
         if not (item.findtext("title") or "").strip():
             errors.append(f"{label}: missing title")
-        for name, limit in (("title", 60), ("description", 4000)):
+        for name, limit in (("description", 4000),):
             if len(item.findtext(name, "")) > limit:
                 errors.append(f"{label}: {name} exceeds {limit} characters")
         episode_type = item.findtext(_tag("itunes:episodeType"))

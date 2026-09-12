@@ -586,7 +586,7 @@ def edit_field(data, field, episode=False):
                 break
             error("At most ten keywords are allowed.")
     else:
-        limit = {"title": 60, "description": 4000}.get(field) if episode else None
+        limit = {"description": 4000}.get(field) if episode else None
         while True:
             value = text(label + (f" (maximum {limit} raw characters)" if limit else ""),
                          current, required=field in ("title", "description", "mp3_url",
@@ -594,12 +594,6 @@ def edit_field(data, field, episode=False):
             if not limit or len(value) <= limit:
                 data[field] = value
                 break
-            if field == "title":
-                replacement = value[:60].rstrip()
-                console.print(f"Original: {value}\nReplacement: {replacement}", markup=False)
-                if menu("Overlong title", ["Truncate to first 60 characters", "Edit title"], 2) == 1:
-                    data[field] = replacement
-                    break
             error(f"Maximum length is {limit} raw characters, including HTML and URLs.")
         if field == "mp3_url":
             if current != data[field]:
@@ -750,18 +744,6 @@ def optional_assets(episode, show):
         error(f"Asset was not added: {exc}")
 
 
-def title_for_save(episode):
-    if len(episode["title"]) <= 60:
-        return
-    original = episode["title"]
-    replacement = original[:60].rstrip()
-    console.print(f"Original: {original}\nReplacement: {replacement}", markup=False)
-    if menu("Overlong title", ["Confirm first 60 characters", "Edit title"], 2) == 1:
-        episode["title"] = replacement
-    else:
-        edit_field(episode, "title", episode=True)
-
-
 def check_slug_collision(db, show_id, slug, exclude_guid=None):
     for episode in db.list_episodes(show_id):
         if episode["guid"] == exclude_guid:
@@ -854,7 +836,6 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
         if action == 1:
             edit_menu(episode, EPISODE_DETAIL_FIELDS, episode=True)
             continue
-        title_for_save(episode)
         errors = validate_episode(episode)
         if errors:
             error("Correct the validation errors before publishing or scheduling.")
@@ -1011,7 +992,6 @@ def edit_episode_form(db, show, publisher, saved):
             continue
         if choice == "Publish now":
             episode.update(publish_at=datetime.now(timezone.utc).isoformat(), status="published")
-        title_for_save(episode)
         if not confirm("Save episode changes?", True):
             continue
         try:
