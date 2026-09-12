@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -19,9 +20,36 @@ from .validation import (
     validate_episode, validate_show,
 )
 
-ACCENT = "#c0ff00"
+ACCENT = "#39ff14"
+WAVEFORM = "▁▂▃▅▇█▇▅▃▂▁"
 console = Console()
 _backup_action = ContextVar("termicast_backup_action", default=None)
+
+
+def show_banner():
+    """Print the startup wordmark once per interactive session."""
+    body = Text("\n").join([
+        Text(f"{WAVEFORM}  T E R M I C A S T  {WAVEFORM}", style=f"bold {ACCENT}", justify="center"),
+        Text("Your podcast. Your signal.", style="dim", justify="center"),
+    ])
+    console.print(Panel(body, border_style=ACCENT, title="[ BROADCAST CONSOLE ]", title_align="left"))
+
+
+def show_summary(db, show):
+    """Print a status box for the open show: episodes, schedule, hosting, feed."""
+    from pathlib import Path
+    episodes = db.list_episodes(show["id"])
+    scheduled = sum(1 for e in episodes if e.get("status") == "scheduled")
+    feed_present = (Path(show["output_dir"]).expanduser() / "feed.xml").is_file()
+    hosting = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
+    body = Text("\n").join([
+        Text(str(show["title"]), style=f"bold {ACCENT}"),
+        Text(f"Episodes: {len(episodes)}"),
+        Text(f"Scheduled: {scheduled}"),
+        Text(f"Hosting: {hosting}"),
+        Text(f"Local feed.xml: {'Present' if feed_present else 'Missing'}"),
+    ])
+    console.print(Panel(body, border_style=ACCENT, title="TERMICAST", title_align="center"))
 
 
 class ExitRequested(BaseException):
@@ -87,12 +115,22 @@ def warning(message):
     console.print(str(message), style="yellow", markup=False)
 
 
-def menu(title, options, default=None):
-    """Return a one-based selection. EOF and interrupts propagate to the CLI."""
+def menu(title, options, default=None, headers=None):
+    """Return a one-based selection. EOF and interrupts propagate to the CLI.
+
+    `headers` optionally maps a 0-based option index to a section label
+    printed (unselectable) immediately before that option, for grouping
+    otherwise-flat option lists without changing their numbering.
+    """
+    headers = headers or {}
     while True:
-        console.print(title, style=ACCENT, markup=False)
-        for index, option in enumerate(options, 1):
-            console.print(f"  {index}. {option}", markup=False)
+        lines = []
+        for index, option in enumerate(options):
+            if index in headers:
+                lines.append(Text(str(headers[index]), style=f"bold {ACCENT}"))
+            lines.append(Text(f"  {index + 1}. {option}"))
+        console.print(Panel(Text("\n").join(lines), title=Text(str(title)),
+                            title_align="left", border_style=ACCENT))
         console.print("  B. Backup saved data    F. FAQ    X. Exit", style=ACCENT)
         answer = console.input("[" + ACCENT + "]Choice[/]" +
                                (f" [{default}]" if default is not None else "") + ": ").strip()

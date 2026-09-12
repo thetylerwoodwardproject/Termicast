@@ -19,7 +19,7 @@ from .csvio import export_csv, import_csv
 from .migration import migration_guidance
 from .models import new_show
 from .prompts import (
-    ACCENT, confirm, console, edit_field, error, menu, show_form, text,
+    ACCENT, confirm, console, edit_field, error, menu, show_banner, show_form, show_summary, text,
     warning, menu_utilities, show_faq, ExitRequested, edit_episode_form, optional_assets,
     add_episode, episode_form, hosting_menu,
 )
@@ -216,8 +216,12 @@ def _tools(db, publisher, show):
 def _open_show(db, publisher, show):
     while True:
         show = db.get_show(show["id"])
-        action = menu(show["title"], ["New episode", "Episodes", "Podcast settings",
-                                      "Hosting", "Tools", "Switch podcast / Back"])
+        show_summary(db, show)
+        action = menu("CONTROL ROOM / Choose a number",
+                      ["New episode", "Episodes", "Podcast settings",
+                       "Hosting", "Tools", "Switch podcast / Back"],
+                      headers={0: "PUBLISH & MANAGE", 2: "CONFIGURATION",
+                               4: "TOOLS", 5: "SESSION"})
         try:
             if action == 6:
                 return
@@ -297,6 +301,7 @@ def _create_or_import(db, publisher, importing=False):
 
 
 def _interactive(db, publisher):
+    show_banner()
     while True:
         action = menu("Termicast", ["Open podcast", "Import existing podcast", "Create podcast",
                                     "Forget podcast", "Quit"])
