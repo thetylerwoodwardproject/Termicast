@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+from PIL import Image
 from lxml import etree
 
 from termicast.archive import load_manifest, merged_template, import_archive, archive_identity
@@ -123,3 +125,59 @@ def test_restage_previews_mapping(tmp_path):
     mapping, errors = restage(manifest, "https://new.example.org/show")
     assert mapping["https://old.example.org/audio/ep1.mp3"] == "https://new.example.org/show/audio/ep1.mp3"
     assert errors == []
+
+
+@pytest.mark.parametrize("source_kind", ["archive", "feed"])
+@pytest.mark.parametrize("action", [1, 2, 3])
+@pytest.mark.parametrize("artwork_kind", ["show", "episode"])
+def test_import_artwork_conversion(tmp_path, monkeypatch, source_kind, action, artwork_kind):
+    from termicast import cli, validation
+    from termicast.importer import download_import
+
+    manifest = make_archive(tmp_path)
+    source = manifest.parent / "cover.png"
+    Image.new("RGBA", (1400, 1400), (255, 0, 0, 0)).save(source)
+    original = source.read_bytes()
+    url = "https://old.example.org/cover.png"
+    tag = "channel" if artwork_kind == "show" else "item"
+    feed = FEED.replace(f"<{tag}>", f'<{tag}><itunes:image href="{url}"/>')
+    (manifest.parent / "feed.xml").write_text(feed)
+    data = json.loads(manifest.read_text())
+    data["assets"][url] = "cover.png"
+    manifest.write_text(json.dumps(data))
+    identity = archive_identity(manifest)
+    show = new_show(**identity)
+    show.update(identity, output_dir=str(tmp_path / "out"), base_url="https://new.example.org/show")
+    prompts = []
+
+    def menu(*args):
+        prompts.append(args)
+        return action
+
+    monkeypatch.setattr(cli, "menu", menu)
+    reviewer = cli._artwork_reviewer()
+
+    def download(url, target, limit):
+        target.write(original if url.endswith(".png") else b"fake-audio")
+
+    monkeypatch.setattr(validation, "_download", download)
+
+    def run():
+        if source_kind == "archive":
+            return import_archive(show, manifest, review_artwork=reviewer)
+        return download_import(show, feed.encode(), review_artwork=reviewer)
+
+    if action == 3:
+        with pytest.raises(RuntimeError, match="Import cancelled"):
+            run()
+        assert not (tmp_path / "out").exists()
+    else:
+        run()
+        images = list((tmp_path / "out").rglob("*.png"))
+        assert len(images) == 1
+        with Image.open(images[0]) as image:
+            expected_size = (1400, 1400) if artwork_kind == "show" else (3000, 3000)
+            assert (image.mode, image.format, image.size) == ("RGB", "PNG", expected_size)
+            assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert source.read_bytes() == original
+    assert len(prompts) == 1

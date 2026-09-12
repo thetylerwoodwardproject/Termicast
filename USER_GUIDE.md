@@ -87,7 +87,7 @@ Choose **3. Create podcast**. Termicast asks for the essentials:
   `https://podcasts.example.com/my-show`.
 
 At the review screen you can choose **Edit field** to fill in optional extras
-(website, language, funding, etc.). When it all looks right, choose **Save**.
+(website, language, funding, OP3 metrics, etc.). When it all looks right, choose **Save**.
 
 That's it — your show is created and its feed file (`feed.xml`) is written.
 
@@ -173,6 +173,21 @@ If you already publish a podcast somewhere else, choose
 2. Downloads your episodes, artwork, and transcripts.
 3. Keeps your episode IDs and details intact.
 4. Generates a new feed at your chosen location.
+
+If your current feed uses OP3 metrics (enclosure URLs prefixed with
+`https://op3.dev/e/`), Termicast detects that and enables **OP3 podcast metrics**
+automatically. You can turn it off later under **Edit field** in the settings
+review.
+
+If JPEG or PNG artwork needs RGB conversion or resizing, Termicast shows its format, color
+mode, and dimensions. Choose **Convert this image**, **Automatically convert
+remaining artwork in this import**, or **Cancel import**. Auto mode lasts only
+for the current import and covers both color conversion and resizing. Transparency
+is flattened onto white. Episode images with incorrect dimensions and show images
+outside the required square 1400–3000 pixel range are resized to 3000×3000.
+Proportions are preserved, with white padding for non-square images; smaller
+images are enlarged. JPEG/PNG format is preserved. This
+also works for archive imports and converts only the staged copy.
 
 After importing, check that the new feed is publicly reachable, then ask your
 old host to set up a **301 redirect** from the old feed URL to the new one.

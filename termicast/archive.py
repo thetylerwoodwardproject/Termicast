@@ -206,7 +206,7 @@ def archive_identity(manifest_path):
     return _extract_show(root, feed)
 
 
-def import_archive(show, manifest_path):
+def import_archive(show, manifest_path, review_artwork=None):
     """Consume an archive manifest + staged files into `show`'s asset root.
 
     Returns `(show, episodes, template)` where `show` carries `import_url_map`
@@ -218,5 +218,6 @@ def import_archive(show, manifest_path):
     template = merged_template(manifest_path, data)
     preseed = {url: (str(root_dir / relative), relative)
                for url, relative in (data.get("assets") or {}).items()}
-    show, episodes = download_import(show, template, preseed=preseed, require_preseed=True)
+    show, episodes = download_import(show, template, preseed=preseed, require_preseed=True,
+                                     review_artwork=review_artwork)
     return show, episodes, template

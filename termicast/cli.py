@@ -34,6 +34,30 @@ def _review_titles(changes):
     return confirm("Save these hard-cut titles (first 60 characters, no ellipsis)?", False)
 
 
+def _artwork_reviewer():
+    """Create conversion approval state scoped to a single import."""
+    automatic = False
+
+    def review(url, format_name, mode, size, target_size=None):
+        nonlocal automatic
+        console.print(f"Artwork needs conversion\nSource: {url}\n"
+                      f"Detected: {format_name}, {mode}, {size[0]}×{size[1]}\n"
+                      "Required: RGB. Transparency, if present, will be flattened onto white.",
+                      markup=False)
+        if target_size:
+            console.print(f"Resize to {target_size[0]}×{target_size[1]}, preserving proportions. "
+                          "Non-square images will be padded with white; smaller images will be enlarged.")
+        if automatic:
+            console.print("Automatically converting artwork to meet import requirements.")
+            return True
+        action = menu("Artwork conversion", ["Convert this image",
+                      "Automatically convert remaining artwork in this import", "Cancel import"], 1)
+        automatic = action == 2
+        return action != 3
+
+    return review
+
+
 def _resolve_optional(episode, kind, url, exc):
     warning(f"{episode['title']}: linked {kind} failed ({url}): {exc}")
     action = menu("Broken optional resource", ["Retry", "Replacement HTTPS URL", "Skip and remove reference"], 1)
@@ -242,7 +266,7 @@ def _create_or_import(db, publisher, importing=False):
             show = show_form(show)
             if show is None:
                 return
-            show, episodes, template = import_archive(show, manifest)
+            show, episodes, template = import_archive(show, manifest, review_artwork=_artwork_reviewer())
         else:
             source = text("Existing feed (HTTPS URL or local XML path)", required=True)
             settings, template = import_feed(source)
@@ -259,7 +283,8 @@ def _create_or_import(db, publisher, importing=False):
                 return
             show, episodes = download_import(show, template, review_titles=_review_titles,
                                              review_optional=lambda episodes, root: _review_optional(episodes, root, show),
-                                             resolve_optional=_resolve_optional)
+                                             resolve_optional=_resolve_optional,
+                                             review_artwork=_artwork_reviewer())
     else:
         show = show_form(new_show(), collect=True)
         if show is None:

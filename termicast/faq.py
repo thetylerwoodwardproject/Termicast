@@ -120,6 +120,14 @@ By default, media working copies are removed once they are on S3, leaving just
 `feed.xml` locally. Enable **Keep a local copy** to retain them for redundancy
 and media-inclusive backups.
 
+## How do OP3 podcast metrics work?
+
+Enable **OP3 podcast metrics** in the podcast settings to prefix every episode's
+enclosure URL with `https://op3.dev/e/`, so download analytics are collected by
+the open OP3 service. The stored media URL is left untouched; the prefix is added
+only when the feed is generated. Importing a feed that already uses OP3 detects
+the prefix and enables it automatically; disable it to serve unprefixed URLs.
+
 ## What does doctor check?
 
 `termicast doctor [show-id]` is read-only. It checks that required tools (FFmpeg,

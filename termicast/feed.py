@@ -26,6 +26,17 @@ NS = {
 }
 MAX_FEED_BYTES = 10 * 1024 * 1024
 
+# OP3 analytics prefix; enclosure URLs are prefixed at render time only, so the
+# stored mp3_url stays the real rehosted URL for downloads and validation.
+OP3_PREFIX = "https://op3.dev/e/"
+
+
+def op3_url(show, mp3_url):
+    """Return the enclosure URL, OP3-prefixed when the show enables metrics."""
+    if show.get("op3") and mp3_url:
+        return OP3_PREFIX + mp3_url
+    return mp3_url
+
 
 def _tag(name):
     if ":" in name:
@@ -214,7 +225,7 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
         _put(item, "guid", guid, isPermaLink="false")
         if episode.get("link"):
             _put(item, "link", episode["link"])
-        _put(item, "enclosure", url=episode["mp3_url"], length=str(int(episode["length"])),
+        _put(item, "enclosure", url=op3_url(show, episode["mp3_url"]), length=str(int(episode["length"])),
              type=enclosure_type(episode["mp3_url"]))
         _put(item, "pubDate", format_datetime(_utc(episode["published_at"]), usegmt=True))
         _put(item, "itunes:duration", _seconds(episode["duration"]))
@@ -253,6 +264,8 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
             }
             replaced = {_tag(tag) for key, tags in groups.items() if episode.get(key) != baseline.get(key) or key in episode.get("_replace_fields", [])
                         for tag in tags}
+            if show.get("op3") and episode.get("mp3_url"):
+                replaced.add(_tag("enclosure"))
             for child in list(original_item):
                 if child.tag in replaced:
                     original_item.remove(child)

@@ -13,7 +13,7 @@ import os
 import shutil
 import tempfile
 
-from .feed import MAX_FEED_BYTES, _parse_xml, _tag, _put
+from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
 from .models import new_episode
 from . import validation
 
@@ -35,6 +35,14 @@ class _HTTPSRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         _https(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _uses_op3(root):
+    for item in root.findall("channel/item"):
+        enclosure = item.find("enclosure")
+        if enclosure is not None and (enclosure.get("url", "") or "").startswith(OP3_PREFIX):
+            return True
+    return False
 
 
 def _extract_show(root, source):
@@ -80,6 +88,7 @@ def _extract_show(root, source):
                     for item in roll.findall(_tag("podcast:remoteItem"))] if roll is not None else [],
         "output_dir": "",
         "base_url": feed_url.rsplit("/", 1)[0] if feed_url.startswith("https://") else "",
+        "op3": _uses_op3(root),
     }
 
 
@@ -186,14 +195,50 @@ def extract_episodes(template, mapping=None):
     return episodes
 
 
+def _convert_import_artwork(path, url, review_artwork, kind=""):
+    """Normalize only the staged copy, after explicit conversion approval."""
+    from PIL import Image, ImageOps
+    from .publisher import atomic_write
+    from io import BytesIO
+
+    with Image.open(path) as image:
+        mode, format_name, size = image.mode, image.format, image.size
+        image.verify()
+    resize = ((kind == "episode" and size != (3000, 3000)) or
+              (kind == "show" and (size[0] != size[1] or not 1400 <= size[0] <= 3000)))
+    if format_name not in ("JPEG", "PNG") or (mode == "RGB" and not resize):
+        return
+    if review_artwork is None:
+        return  # The strict validator supplies the error for noninteractive callers.
+    options = {"target_size": (3000, 3000)} if resize else {}
+    if not review_artwork(url, format_name, mode, size, **options):
+        # Do not let optional-resource recovery swallow cancellation.
+        raise RuntimeError("Import cancelled: artwork conversion declined")
+    with Image.open(path) as image:
+        if "A" in image.getbands() or "transparency" in image.info:
+            background = Image.new("RGBA", image.size, (255, 255, 255, 255))
+            converted = Image.alpha_composite(background, image.convert("RGBA")).convert("RGB")
+        else:
+            converted = image.convert("RGB")
+        if resize:
+            converted = ImageOps.pad(converted, (3000, 3000), method=Image.Resampling.LANCZOS,
+                                     color=(255, 255, 255))
+        content = BytesIO()
+        converted.save(content, format_name)
+    atomic_write(path, content.getvalue())
+
+
 def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None,
-                    preseed=None, require_preseed=False):
+                    preseed=None, require_preseed=False, review_artwork=None):
     """Stage every supported asset before installing a new public directory.
 
     The original XML stays untouched. Exact URL substitutions are persisted in
     show settings so unknown XML can survive rehosting and subsequent edits.
     `preseed` maps original URLs to `(source_path, relative_path)` pairs already
     staged locally (the archive adapter); those are copied, never re-downloaded.
+    `review_artwork(url, format, mode, size, target_size=...)` approves conversion
+    of a staged JPEG/PNG. The optional target_size keyword requests resizing;
+    a false result cancels the import. Omit the callback for strict validation.
     """
     errors = validation.validate_show(show)
     if errors:
@@ -266,6 +311,7 @@ def download_import(show, template, review_titles=None, review_optional=None, re
                 mapping[url] = asset_base(show) + "/" + relative
                 local_paths[url] = path
             if kind:
+                _convert_import_artwork(path, url, review_artwork, kind=kind)
                 validation.inspect_local_artwork(path, episode=kind == "episode", chapter=kind == "chapter")
             return mapping[url]
 

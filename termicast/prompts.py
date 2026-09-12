@@ -47,7 +47,7 @@ SHOW_FIELDS = (
     "copyright", "artwork_url", "locked", "explicit", "language", "podcast_type",
     "timezone", "category", "subcategory", "secondary_category", "funding_url",
     "funding_label", "podroll", "output_dir", "base_url", "audio_preset",
-    "image_preset", "hosting",
+    "image_preset", "hosting", "op3",
 )
 EPISODE_FIELDS = (
     "title", "description", "link", "mp3_url", "length", "duration", "episode_type",
@@ -120,10 +120,76 @@ def menu(title, options, default=None):
         error(f"Enter a number from 1 to {len(options)}, B for backup, F for FAQ, or X to exit.")
 
 
-def text(label, default="", required=False):
+# Keys are prompt labels without parenthesized requirements, shared by forms
+# and CLI actions so examples stay consistent when a field is edited later.
+PROMPT_EXAMPLES = {
+    "title": "The hidden cost of fast internet",
+    "description": "A look at how internet providers price and deliver broadband.",
+    "author": "Alex Morgan",
+    "owner name": "Alex Morgan",
+    "owner email": "alex@example.com",
+    "website": "https://example.com/my-show",
+    "copyright": "© 2026 Alex Morgan",
+    "language": "en (English), en-US (US English), or es (Spanish)",
+    "link": "https://example.com/my-show/episodes/episode-42",
+    "mp3 url": "https://media.example.com/my-show/audio/episode-42.mp3",
+    "artwork url": "https://media.example.com/my-show/cover.png",
+    "transcript url": "https://media.example.com/my-show/transcripts/episode-42.vtt",
+    "funding url": "https://example.com/my-show/support",
+    "funding label": "Support the show",
+    "output dir": "/var/www/html/my-show",
+    "base url": "https://example.com/my-show",
+    "new output directory": "/var/www/html/my-show",
+    "existing local source file": "/home/alex/podcast/episode-42.mp3",
+    "private backup directory": "/home/alex/backups/termicast",
+    "csv path": "/home/alex/podcast/episodes.csv",
+    "private csv destination": "/home/alex/backups/episodes.csv",
+    "archive manifest path": "/home/alex/podcast-archive/manifest.json",
+    "existing feed": "https://old.example.com/feed.xml or /home/alex/podcast/feed.xml",
+    "replacement https url": "https://media.example.com/my-show/transcripts/episode-42.vtt",
+    "https s3 api endpoint": "https://us-east-1.linodeobjects.com",
+    "bucket name": "podcast-media",
+    "show prefix": "my-show",
+    "public asset url of the bucket/prefix": "https://podcast-media.us-east-1.linodeobjects.com/my-show",
+    "iana timezone": "America/New_York, Europe/London, or UTC",
+    "length": "28800000 (file size in bytes, not MB)",
+    "duration": "00:30:00 or 1800 (a 30-minute episode)",
+    "episode number": "42",
+    "season number": "2",
+    "keywords": "technology, internet, broadband",
+    "feed guid": "5eaf7b5e-cc24-5e12-9c73-96c1f81c3b12",
+    "feed url": "https://example.com/another-show/feed.xml",
+    "start": "00:01:30 or 90 (starts at 90 seconds)",
+    "stop": "00:02:00 or 120 (ends at 120 seconds)",
+    "chapter artwork url": "https://media.example.com/my-show/images/chapter-1.png",
+    "chapter link": "https://example.com/my-show/notes#chapter-1",
+    "chapter json path or https url": "/home/alex/podcast/chapters.json or https://example.com/chapters.json",
+    "vtt path or https url": "/home/alex/podcast/episode-42.vtt or https://example.com/episode-42.vtt",
+    "slug": "s02ep042 or the-hidden-cost-of-internet",
+    "audio file path": "/home/alex/podcast/episode-42.mp3",
+    "artwork file path": "/home/alex/podcast/cover.png",
+    "transcript file path": "/home/alex/podcast/episode-42.vtt",
+}
+
+PROMPT_HELP = {
+    "output dir": "Local folder where Termicast writes feed.xml and public files. Your web server must serve this folder.",
+    "new output directory": "Local destination folder for the podcast's public files.",
+    "base url": "Public HTTPS address serving the output directory. Enter the directory URL; Termicast appends /feed.xml.",
+    "public asset url of the bucket/prefix": "Public HTTPS directory for uploaded media, including the show prefix. Use the listener-facing URL.",
+    "show prefix": "Folder-like path inside the bucket; omit leading and trailing slashes. Blank uses the bucket root.",
+}
+
+
+def text(label, default="", required=False, *, example=None):
     """Blank retains a default; a single '-' explicitly clears an optional field."""
     while True:
         console.print(label, style=ACCENT, markup=False)
+        key = label.split(" (", 1)[0].casefold()
+        if key in PROMPT_HELP:
+            console.print(PROMPT_HELP[key], style="dim", markup=False)
+        sample = example if example is not None else PROMPT_EXAMPLES.get(key)
+        if sample:
+            console.print(f"Example: {sample}", style="dim", markup=False)
         if default is not None and str(default) != "":
             console.print(f"Current: {default}", markup=False)
         value = console.input("Value (Enter keeps current; - clears): ").strip()
@@ -282,6 +348,10 @@ def edit_field(data, field, episode=False):
     label = field.replace("_", " ").title()
     if field in ("locked", "explicit", "enabled"):
         data[field] = confirm(label, bool(current))
+    elif field == "op3":
+        console.print("OP3 prefixes each episode's enclosure URL with "
+                      "https://op3.dev/e/ to collect podcast metrics.", markup=False)
+        data[field] = confirm("Enable OP3 podcast metrics?", bool(current))
     elif field in ("podcast_type", "episode_type"):
         data[field] = choice(label, ["full", "trailer", "bonus"] if episode else
                              ["episodic", "serial"], current)
@@ -422,7 +492,8 @@ def show_form(show, collect=False):
 def schedule_time(show, *, confirm_time=True):
     zone = show.get("timezone", "UTC")
     while True:
-        raw = text(f"Publication time in {zone} (ISO date/time; explicit offset resolves DST; - cancels)")
+        raw = text(f"Publication time in {zone} (ISO date/time; explicit offset resolves DST; - cancels)",
+                   example="2027-06-15T09:00:00 (local time) or 2027-06-15T09:00:00+00:00 (explicit UTC offset); choose a future date")
         if not raw:
             return None
         try:

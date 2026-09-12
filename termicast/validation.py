@@ -135,7 +135,7 @@ def _fields(record, limits, required, urls):
     for field in urls:
         if record.get(field) and not validate_https(record[field]):
             errors.append(f"{field} must be an absolute HTTPS URL")
-    for field in ("explicit", "locked"):
+    for field in ("explicit", "locked", "op3"):
         if field in record and type(record[field]) is not bool:
             errors.append(f"{field} must be a boolean")
     return errors
