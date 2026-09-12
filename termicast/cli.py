@@ -238,7 +238,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled")})
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media")})
             show = show_form(show)
             if show is None:
                 return
@@ -253,7 +253,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled")})
+                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media")})
             show = show_form(show)
             if show is None:
                 return

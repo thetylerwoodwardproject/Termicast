@@ -111,6 +111,13 @@ Hosting is configured under **Hosting** in the show menu:
   `enabled` controls automatic deployment on publish/schedule; `deploy` works
   with valid configuration even when it is disabled.
 
+By default, once a media asset is on S3 its local working copy is removed, so
+the output directory holds only `feed.xml` (plus regenerated chapter/transcript
+files during a publish). Set **Keep a local copy** (`keep_local_media`) in
+Hosting to retain the working copies for redundancy and media-inclusive
+backups. Media already on S3 with no local copy is skipped on later deploys —
+remote objects are never deleted automatically.
+
 `feed.xml` is written last, after its media is in place, so the feed never
 references a missing file. Deployment uses one `s4cmd` subprocess at a time
 (64 MiB single-part threshold, 16 MiB multipart parts, 2 workers), sets explicit

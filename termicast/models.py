@@ -67,7 +67,8 @@ def new_show(**kwargs) -> dict:
     show.update(id=str(uuid4()), locked=False, explicit=False, language="en",
                 podcast_type="episodic", timezone="UTC", podroll=[],
                 hosting="local", endpoint_url="", bucket="", prefix="",
-                enabled=False, audio_preset="standard", image_preset="compact")
+                enabled=False, keep_local_media=False,
+                audio_preset="standard", image_preset="compact")
     show.update(kwargs)
     if "guid" not in kwargs:
         show["guid"] = str(uuid5(NAMESPACE_URL, show["base_url"].rstrip("/") + "/feed.xml"))

@@ -212,6 +212,14 @@ files. You'll set two addresses:
 Put your S3 credentials in a file called `~/.s3cfg` on the server (never in
 Termicast). Termicast only stores the bucket name and addresses.
 
+When setting up S3, you'll also be asked: **"Keep a local copy of media after
+it's uploaded to S3?"**
+
+- **No** (default): once your audio and artwork are in the bucket, the local
+  copies are removed. Only `feed.xml` stays on your server.
+- **Yes**: Termicast keeps a copy on your server too, for redundancy and
+  backup purposes.
+
 ---
 
 ## 9. Backing up your data

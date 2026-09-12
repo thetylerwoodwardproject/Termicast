@@ -58,6 +58,8 @@ def validate_storage(show):
             errors.append("S3 prefix must have no leading/trailing slash or empty/dot components")
     if "enabled" in show and not isinstance(show["enabled"], bool):
         errors.append("enabled must be a boolean")
+    if "keep_local_media" in show and not isinstance(show["keep_local_media"], bool):
+        errors.append("keep_local_media must be a boolean")
     return errors
 
 

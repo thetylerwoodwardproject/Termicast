@@ -64,18 +64,39 @@ def test_deploy_local_returns_paths(db, show):
     assert "audio/e1.mp3" in paths
 
 
+def _write_local_audio(show):
+    path = Path(show["output_dir"]) / "audio" / "e1.mp3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"audio-data")
+    return path
+
+
 def test_s3_publish_uploads_assets_not_feed(db, show, monkeypatch):
     show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show", enabled=True)
     db.save_show(show)
+    audio = _write_local_audio(show)
     uploaded = []
     from termicast import s3deploy
     monkeypatch.setattr(s3deploy, "deploy_paths",
-                        lambda s, paths, dry_run=False, verify=True: uploaded.append(list(paths)))
+                        lambda s, paths, dry_run=False, verify=True: uploaded.append(list(paths)) or list(paths))
     Publisher(db).publish(show["id"], make_episode())
     assert uploaded, "deploy_paths should have been called"
     assert "feed.xml" not in uploaded[0]
     assert "audio/e1.mp3" in uploaded[0]
     assert (Path(show["output_dir"]) / "feed.xml").is_file()
+    # Default keep_local_media=False removes the uploaded working copy.
+    assert not audio.exists()
+
+
+def test_s3_keep_local_media_retains_working_copy(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, keep_local_media=True)
+    db.save_show(show)
+    audio = _write_local_audio(show)
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: list(a[1]))
+    Publisher(db).publish(show["id"], make_episode())
+    assert audio.exists()
 
 
 def test_s3_disabled_skips_auto_deploy(db, show, monkeypatch):

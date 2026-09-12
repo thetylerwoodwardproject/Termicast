@@ -64,6 +64,25 @@ def episode_asset_paths(episode):
     return paths
 
 
+def upload_existing_assets(show, relative_paths, dry_run=False, verify=True):
+    """Upload local asset files that exist, then optionally remove them.
+
+    Media already on S3 has no local copy when `keep_local_media` is off, so
+    missing local files are skipped (the remote object is retained). Uploaded
+    files are removed afterward unless `keep_local_media` is enabled.
+    """
+    from .s3deploy import deploy_paths
+    root = asset_root(show)
+    existing = [relative for relative in relative_paths if (root / relative).is_file()]
+    if not existing:
+        return []
+    uploaded = deploy_paths(show, existing, dry_run=dry_run, verify=verify)
+    if not show.get("keep_local_media") and not dry_run:
+        for relative in uploaded:
+            (root / relative).unlink(missing_ok=True)
+    return uploaded
+
+
 class Publisher:
     def __init__(self, db):
         self.db = db
@@ -190,8 +209,7 @@ class Publisher:
             for episode in episodes:
                 assets |= episode_asset_paths(episode)
             if show.get("hosting") == "s3":
-                from .s3deploy import deploy_paths
-                return deploy_paths(show, sorted(assets), dry_run=dry_run, verify=verify)
+                return upload_existing_assets(show, sorted(assets), dry_run=dry_run, verify=verify)
             feed = asset_root(show) / "feed.xml"
             if not feed.is_file():
                 raise ValueError("No local feed.xml to deploy; publish or regenerate first")
@@ -260,12 +278,11 @@ class Publisher:
                              (json.dumps(chapters, ensure_ascii=True, allow_nan=False, indent=2) + "\n").encode())
 
     def _deploy_remote(self, snapshot, show):
-        from .s3deploy import deploy_paths
         paths = set()
         for episode in snapshot["episodes"]:
             paths |= episode_asset_paths(episode)
         try:
-            deploy_paths(show, sorted(paths))
+            upload_existing_assets(show, sorted(paths))
         except Exception as exc:
             raise RuntimeError(
                 f"Saved locally. Remote publication failed: {exc}. "

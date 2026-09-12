@@ -384,8 +384,11 @@ def hosting_form(data):
                              ("asset_base_url", "Public asset URL of the bucket/prefix (e.g. https://my-bucket.us-east-1.linodeobjects.com/my-show)")):
             data[field] = text(label, data.get(field, ""), required=field in ("bucket", "asset_base_url"))
         data["enabled"] = confirm("Automatically deploy on publish/schedule?", bool(data.get("enabled", False)))
+        data["keep_local_media"] = confirm(
+            "Keep a local copy of media after it's uploaded to S3 (for redundancy and media-inclusive backups)?",
+            bool(data.get("keep_local_media", False)))
     else:
-        for field in ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled"):
+        for field in ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media"):
             data.pop(field, None)
     errors = validate_storage(data)
     if errors:

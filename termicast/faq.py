@@ -116,6 +116,10 @@ public **asset base URL** in the **Hosting** submenu. The feed references those
 asset URLs and is written last, after its media is in place. Deploy with
 `termicast deploy <show-id>` and verify with `termicast doctor <show-id>`.
 
+By default, media working copies are removed once they are on S3, leaving just
+`feed.xml` locally. Enable **Keep a local copy** to retain them for redundancy
+and media-inclusive backups.
+
 ## What does doctor check?
 
 `termicast doctor [show-id]` is read-only. It checks that required tools (FFmpeg,
