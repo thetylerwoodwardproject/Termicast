@@ -68,14 +68,14 @@ termicast faq                               read the FAQ without a database
 `--data-dir` (before any subcommand) overrides the state directory, which
 defaults to `~/.local/share/termicast/`.
 
-## 🎙️ Episode workflow
+## 🎧 Episode workflow
 
 `add` validates inputs (audio required, no ambiguous files), chooses or suggests
 an editorial slug, prepares media, shows filenames/settings/sizes, collects
 episode details, and publishes now or schedules. The menu **New episode** uses
 the same flow.
 
-### 🎚️ Presets
+### 🎯 Presets
 
 | Audio preset | Output |
 | --- | --- |
@@ -93,7 +93,7 @@ are preserved; transparency is flattened onto white; oversize square covers are
 reduced to 3000x3000. Per-episode overrides: `--audio-preset`, `--image-preset`,
 `--keep-audio`, `--keep-image`.
 
-### 🏷️ Slugs and files
+### 🔖 Slugs and files
 
 `--slug s02ep042` produces:
 
@@ -138,7 +138,7 @@ output directories):
 > - `publish-due` also retries shows left "dirty" by a previously failed
 >   publication, so a transient error self-heals on the next tick.
 
-## ☁️ Hosting
+## 🌐 Hosting
 
 Each show has an output directory and a public HTTPS **base URL**. The feed file
 `feed.xml` **always stays on your web server**: it is written to the output
@@ -253,7 +253,7 @@ chapters; `--include-media` also copies `audio/`, `images/`, and `transcripts/`.
 > Restore is manual: stop cron, extract into a private directory, restore the
 > database and outputs, regenerate, and verify with `validate` and `doctor`.
 
-## 🗺️ Planned additions
+## 🔮 Planned additions
 
 I'm planning optional tools to help prepare podcast episodes:
 

@@ -30,7 +30,7 @@ address. You can manage several shows at once.
 
 ---
 
-## 🛠️ 2. Installing
+## 🔧 2. Installing
 
 You need a Linux server with Python 3.11+ and FFmpeg.
 
@@ -102,7 +102,7 @@ That's it — your show is created and its feed file (`feed.xml`) is written.
 
 ---
 
-## 🎙️ 5. Adding an episode (the main thing you'll do)
+## 🎧 5. Adding an episode (the main thing you'll do)
 
 Open your show, then choose **1. New episode**.
 
@@ -206,7 +206,7 @@ also works for archive imports and converts only the staged copy.
 
 ---
 
-## ☁️ 8. Hosting (where your files live)
+## 🌐 8. Hosting (where your files live)
 
 One thing stays the same no matter what: **your feed file (`feed.xml`) always
 stays on your own web server.** It's written to the show's output folder and
