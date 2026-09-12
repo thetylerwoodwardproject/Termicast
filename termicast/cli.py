@@ -96,8 +96,10 @@ def _choose_naming(episodes, show):
     _preview_names(planned, len(episodes))
     if show.get("hosting") == "s3" and not show.get("keep_local_media"):
         warning("This podcast uploads media to S3 and does not keep a local copy. "
-                "Once deployed, these files can no longer be renamed from Termicast. "
-                "Consider enabling 'Keep a local copy of media' under Hosting.")
+                "Termicast can still rename these files after they're deployed by "
+                "renaming the object directly in S3, without a local copy. Consider "
+                "enabling 'Keep a local copy of media' under Hosting for redundancy "
+                "and media-inclusive backups.")
     if not confirm("Use these names?", True):
         return None, fallback
     return scheme, fallback
@@ -310,17 +312,60 @@ def _open_show(db, publisher, show):
             error(f"Action failed: {exc}")
 
 
+def _pick_output_dir(destination):
+    """Ask for the output directory; offer to overwrite an existing feed.xml there.
+
+    Returns True if the user chose to overwrite a previous import.
+    """
+    while True:
+        edit_field(destination, "output_dir")
+        feed_path = Path(destination["output_dir"]).expanduser().absolute() / "feed.xml"
+        if not feed_path.exists() and not feed_path.is_symlink():
+            return False
+        action = menu(f"{feed_path} already exists",
+                      ["Overwrite it (deletes the existing feed.xml and managed "
+                       "audio/images/transcripts/chapters)",
+                       "Choose a different directory", "Cancel import"], 2)
+        if action == 1:
+            return True
+        if action == 3:
+            raise Cancelled
+
+
+def _configure_hosting(destination):
+    """Collect hosting settings, verifying an S3 destination is reachable now.
+
+    Failing fast here means a bad bucket/endpoint/credential is caught before
+    the rest of the import wizard (feed fetch, metadata review, naming) runs.
+    """
+    from .prompts import hosting_form
+    while True:
+        hosting_form(destination)
+        if destination.get("hosting") != "s3":
+            return
+        console.print("Verifying the S3 destination is reachable...", markup=False)
+        try:
+            from .s3deploy import check_s3_destination
+            check_s3_destination(destination)
+        except (ValueError, RuntimeError) as exc:
+            error(f"S3 check failed: {exc}")
+            if confirm("Edit hosting settings and try again?", True):
+                continue
+            raise Cancelled
+        console.print("S3 destination looks good.", style=ACCENT)
+        return
+
+
 def _create_or_import(db, publisher, importing=False):
     source = ""
     template = None
     episodes = None
     if importing:
         destination = new_show()
-        console.print("Choose the feed directory and its public HTTPS directory URL. Existing website directories are allowed; feed.xml must not exist. Hosting is configured next.", markup=False)
-        edit_field(destination, "output_dir")
+        console.print("Choose the feed directory and its public HTTPS directory URL. Existing website directories are allowed. Hosting is configured next.", markup=False)
+        overwrite = _pick_output_dir(destination)
         edit_field(destination, "base_url")
-        from .prompts import hosting_form
-        hosting_form(destination)
+        _configure_hosting(destination)
         kind = menu("Import source", ["Feed (HTTPS URL or local XML)", "Archive manifest (local files)"], 1)
         if kind == 2:
             manifest = text("Archive manifest path (manifest.json)", required=True)
@@ -340,7 +385,8 @@ def _create_or_import(db, publisher, importing=False):
             scheme, fallback = _choose_naming(
                 extract_episodes(merged_template(*load_manifest(manifest))), show)
             show, episodes, template = import_archive(show, manifest, review_artwork=_artwork_reviewer(),
-                                                      naming=scheme, naming_fallback=fallback)
+                                                      naming=scheme, naming_fallback=fallback,
+                                                      overwrite=overwrite)
         else:
             source = text("Existing feed (HTTPS URL or local XML path)", required=True)
             settings, template = import_feed(source)
@@ -361,7 +407,8 @@ def _create_or_import(db, publisher, importing=False):
                                              review_optional=lambda episodes, root: _review_optional(episodes, root, show),
                                              resolve_optional=_resolve_optional,
                                              review_artwork=_artwork_reviewer(),
-                                             naming=scheme, naming_fallback=fallback)
+                                             naming=scheme, naming_fallback=fallback,
+                                             overwrite=overwrite)
     else:
         show = show_form(new_show(), collect=True)
         if show is None:

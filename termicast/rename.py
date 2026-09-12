@@ -28,17 +28,18 @@ class RenamePlan:
 
     def __init__(self, slug):
         self.slug = slug
-        self.moves = []          # [(old_relative, new_relative)]
+        self.moves = []          # [(old_relative, new_relative)] local file moves
+        self.remote_moves = []   # [(old_relative, new_relative)] S3-only, no local file
         self.fields = {}         # episode field updates
         self.url_changes = []    # [(old_public_url, new_public_url)]
         self.map_updates = {}    # import_url_map key -> new value
         self.orphans = []        # files left behind at the old name
-        self.missing = []        # referenced assets with no local file
+        self.missing = []        # referenced assets with no local file (non-S3 hosting)
         self.blocked = []        # destinations already occupied
         self.warnings = []
 
     def __bool__(self):
-        return bool(self.moves or self.orphans)
+        return bool(self.moves or self.remote_moves or self.orphans)
 
 
 def _safe_relative(assets, relative):
@@ -87,12 +88,19 @@ def plan_rename(show, episode, new_slug, others=()):
         if new_relative == relative:
             continue
         if not source.is_file():
-            plan.missing.append(relative)
-            continue
-        if target.exists():
+            if show.get("hosting") == "s3":
+                # No local copy (S3 without "keep a local copy of media"):
+                # the object is renamed directly in S3 instead of moving a
+                # local file, so this isn't actually missing anything.
+                plan.remote_moves.append((relative, new_relative))
+            else:
+                plan.missing.append(relative)
+                continue
+        elif target.exists():
             plan.blocked.append(new_relative)
             continue
-        plan.moves.append((relative, new_relative))
+        else:
+            plan.moves.append((relative, new_relative))
         plan.fields[path_field] = new_relative
         new_url = asset_base(show) + "/" + new_relative
         plan.fields[field] = new_url
@@ -142,6 +150,23 @@ def _apply_moves(assets, moves):
         raise
 
 
+def _apply_remote_moves(show, moves):
+    """Rename S3 objects in place, undoing whatever succeeded if one fails."""
+    from .s3deploy import remote_rename
+    done = []
+    try:
+        for old, new in moves:
+            remote_rename(show, old, new)
+            done.append((old, new))
+    except Exception:
+        for old, new in reversed(done):
+            try:
+                remote_rename(show, new, old)
+            except Exception:
+                pass
+        raise
+
+
 def rename_episode(db, show, episode, plan):
     """Commit a planned rename. Returns the updated (show, episode).
 
@@ -154,7 +179,7 @@ def rename_episode(db, show, episode, plan):
         raise ValueError("No local file to move: " + ", ".join(plan.missing))
     if plan.blocked:
         raise ValueError("Destination already exists: " + ", ".join(plan.blocked))
-    if not plan.moves:
+    if not plan.moves and not plan.remote_moves:
         raise ValueError("This episode has no managed local files to rename")
     updated = dict(episode, **plan.fields)
     status, target = updated.pop("status"), updated.pop("publish_at")
@@ -177,7 +202,7 @@ def rename_episode(db, show, episode, plan):
             settings["import_url_map"] = {**(current.get("import_url_map") or {}),
                                           **plan.map_updates}
         if settings.get("asset_files"):
-            moved = dict(plan.moves)
+            moved = dict(plan.moves) | dict(plan.remote_moves)
             settings["asset_files"] = sorted({moved.get(f, f) for f in settings["asset_files"]})
         with db.connection() as conn:
             conn.execute("UPDATE shows SET settings=?, dirty=1 WHERE id=?",
@@ -188,6 +213,14 @@ def rename_episode(db, show, episode, plan):
                           json.dumps(updated, allow_nan=False), target, status))
             with output_lock(settings):
                 _apply_moves(assets, plan.moves)
+                try:
+                    if plan.remote_moves:
+                        _apply_remote_moves(show, plan.remote_moves)
+                except Exception:
+                    # The DB transaction is about to roll back; put local
+                    # files back the way _apply_moves left them.
+                    _apply_moves(assets, [(new, old) for old, new in plan.moves])
+                    raise
     return settings, dict(updated, status=status, publish_at=target)
 
 

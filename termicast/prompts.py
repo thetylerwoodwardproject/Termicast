@@ -930,18 +930,22 @@ def rename_form(db, show, publisher, saved):
         for relative in plan.blocked:
             error(f"Destination already exists: {relative}")
         if plan.missing:
-            warning("Media uploaded to S3 without 'Keep a local copy of media' has no local "
-                    "file to rename. Enable that setting, or restore from a backup made with "
-                    "--include-media, and try again.")
+            warning("No local file to rename. Restore it from a backup made with "
+                    "--include-media, or from the original source, and try again.")
             return False
         if plan.blocked:
             return False
-        if not plan.moves:
-            warning("Nothing to rename: this episode has no managed local files.")
+        if not plan.moves and not plan.remote_moves:
+            warning("Nothing to rename: this episode has no managed files.")
             return False
-        console.print("Files to move:", style=ACCENT)
-        for old, new in plan.moves:
-            console.print(f"  {old}  ->  {new}", markup=False)
+        if plan.moves:
+            console.print("Files to move:", style=ACCENT)
+            for old, new in plan.moves:
+                console.print(f"  {old}  ->  {new}", markup=False)
+        if plan.remote_moves:
+            console.print("S3 objects to rename directly (no local copy):", style=ACCENT)
+            for old, new in plan.remote_moves:
+                console.print(f"  {old}  ->  {new}", markup=False)
         console.print("Public URLs:", style=ACCENT)
         for old, new in plan.url_changes:
             console.print(f"  {old}\n  ->  {new}", markup=False)
@@ -949,9 +953,13 @@ def rename_form(db, show, publisher, saved):
             warning("This episode is already published, and the URLs above are live. "
                     "Apps and directories that cached the old URL will get 404s; copies "
                     "already downloaded keep working.")
-            if show.get("hosting") == "s3":
-                warning("On S3 the old objects are NOT deleted, and the new names are not "
-                        "public until the next deploy.")
+            if plan.moves and show.get("hosting") == "s3":
+                warning("On S3 the old objects for the locally-copied files are NOT "
+                        "deleted, and the new names are not public until the next deploy.")
+            if plan.remote_moves:
+                console.print("Files with no local copy are renamed directly in S3: the "
+                              "old objects are deleted immediately and the new names are "
+                              "public right away.", markup=False)
             if not confirm(f"Rename the published episode {saved['title']!r} anyway?", False):
                 return False
         elif not confirm("Rename these files?", True):
@@ -963,7 +971,7 @@ def rename_form(db, show, publisher, saved):
                                     "old name?", False):
             for relative in clear_orphans(updated_show, plan):
                 console.print(f"Deleted {relative}", markup=False)
-        if updated_show.get("hosting") == "s3" and not updated_show.get("enabled"):
+        if updated_show.get("hosting") == "s3" and not updated_show.get("enabled") and plan.moves:
             warning(f"Upload the renamed files with: termicast deploy {show['id']}")
         return True
 

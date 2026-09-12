@@ -5,7 +5,7 @@ import pytest
 
 from termicast import s3deploy
 from termicast.models import new_show
-from termicast.s3deploy import object_key, s4cmd_args, upload_file, deploy_paths
+from termicast.s3deploy import object_key, s4cmd_args, upload_file, deploy_paths, remote_rename
 
 
 def s3_show(tmp_path):
@@ -76,6 +76,26 @@ def test_deploy_paths_uploads_in_order(tmp_path, monkeypatch):
     monkeypatch.setattr(s3deploy, "upload_file", lambda show, local, rel, dry_run=False: uploaded.append(rel))
     deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
     assert uploaded == ["audio/x.mp3", "chapters/x.json"]
+
+
+def test_remote_rename_runs_s4cmd_mv(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    remote_rename(show, "audio/old.mp3", "audio/new.mp3")
+    args = run.call_args.args[0]
+    assert args[1] == "mv"
+    assert "--endpoint-url" in args and "https://s3.example.org" in args
+    assert args[-2] == "s3://my-bucket/my-show/audio/old.mp3"
+    assert args[-1] == "s3://my-bucket/my-show/audio/new.mp3"
+
+
+def test_remote_rename_raises_on_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "no such key"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="no such key"):
+        remote_rename(show, "audio/old.mp3", "audio/new.mp3")
 
 
 def test_deploy_paths_stops_on_failure(tmp_path, monkeypatch):

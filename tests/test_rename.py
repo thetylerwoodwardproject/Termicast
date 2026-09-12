@@ -87,6 +87,16 @@ def test_plan_reports_a_missing_file(show, episode):
     assert plan.missing == ["audio/old.mp3"]
 
 
+def test_plan_routes_a_missing_s3_only_file_to_remote_moves(db, show, episode):
+    """No local copy on S3 hosting is renamed in place, not reported missing."""
+    show = db.save_show(dict(show, hosting="s3", bucket="b", asset_base_url=BASE))
+    (asset_root(show) / "audio" / "old.mp3").unlink()
+    plan = plan_rename(show, episode, "ep001")
+    assert not plan.missing
+    assert ("audio/old.mp3", "audio/ep001.mp3") in plan.remote_moves
+    assert plan.fields["mp3_url"] == f"{BASE}/audio/ep001.mp3"
+
+
 def test_plan_reports_a_blocked_destination(show, episode):
     (asset_root(show) / "audio" / "ep001.mp3").write_bytes(b"in the way")
     plan = plan_rename(show, episode, "ep001")
@@ -139,6 +149,37 @@ def test_rename_rolls_back_a_partial_move(db, show, episode, monkeypatch):
     assert (assets / "images" / "old.jpg").is_file()
     assert not (assets / "audio" / "ep001.mp3").exists()
     assert db.list_episodes(show["id"])[0] == episode
+
+
+def test_rename_calls_remote_rename_for_s3_only_assets(db, show, episode, monkeypatch):
+    show = db.save_show(dict(show, hosting="s3", bucket="b", asset_base_url=BASE))
+    (asset_root(show) / "audio" / "old.mp3").unlink()
+    plan = plan_rename(show, episode, "ep001")
+    calls = []
+    monkeypatch.setattr("termicast.s3deploy.remote_rename",
+                        lambda show, old, new: calls.append((old, new)))
+    _, renamed = rename_episode(db, show, episode, plan)
+    assert calls == [("audio/old.mp3", "audio/ep001.mp3")]
+    assert renamed["mp3_url"] == f"{BASE}/audio/ep001.mp3"
+    # The artwork and transcript did have local copies, so they still moved.
+    assert (asset_root(show) / "images" / "ep001.jpg").is_file()
+
+
+def test_rename_rolls_back_local_moves_when_a_remote_rename_fails(db, show, episode, monkeypatch):
+    show = db.save_show(dict(show, hosting="s3", bucket="b", asset_base_url=BASE))
+    (asset_root(show) / "audio" / "old.mp3").unlink()
+    plan = plan_rename(show, episode, "ep001")
+
+    def failing(show, old, new):
+        raise RuntimeError("s4cmd unreachable")
+
+    monkeypatch.setattr("termicast.s3deploy.remote_rename", failing)
+    with pytest.raises(RuntimeError, match="s4cmd unreachable"):
+        rename_episode(db, show, episode, plan)
+    assets = asset_root(show)
+    assert (assets / "images" / "old.jpg").is_file()
+    assert not (assets / "images" / "ep001.jpg").exists()
+    assert db.list_episodes(show["id"])[0]["slug"] == "old"
 
 
 def test_rename_updates_the_import_url_map_in_place(db, show, episode):

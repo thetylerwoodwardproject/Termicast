@@ -104,6 +104,26 @@ def deploy_paths(show, relative_paths, source_root=None, *, dry_run=False, verif
     return uploaded
 
 
+def remote_rename(show, old_relative, new_relative):
+    """Rename one S3 object in place via a server-side copy, then delete the old key.
+
+    Used when an asset has no local copy (S3 hosting without 'keep a local
+    copy of media'): the bytes never leave S3, so nothing needs downloading
+    and re-uploading. Metadata, including Content-Type, is preserved by s4cmd.
+    """
+    args = [s4cmd_path(), "mv"]
+    if show.get("endpoint_url"):
+        args += ["--endpoint-url", show["endpoint_url"]]
+    args += ["--force",
+             f"s3://{show['bucket']}/{object_key(show, old_relative)}",
+             f"s3://{show['bucket']}/{object_key(show, new_relative)}"]
+    process = subprocess.run(args, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"s4cmd rename failed for {old_relative} -> {new_relative}: "
+            f"{process.stderr.strip() or process.stdout.strip()}") from None
+
+
 def check_s3_destination(show):
     """Reject importing into a prefix that already contains objects."""
     key = object_key(show, "")

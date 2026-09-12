@@ -98,6 +98,36 @@ def test_import_archive_installs_without_redownload(tmp_path):
     assert show["import_url_map"]["https://old.example.org/audio/ep1.mp3"] == "https://new.example.org/show/audio/ep1.mp3"
 
 
+def test_import_archive_refuses_an_existing_feed(tmp_path):
+    manifest = make_archive(tmp_path)
+    identity = archive_identity(manifest)
+    show = new_show(**identity)
+    show.update(identity)
+    show["output_dir"] = str(tmp_path / "out")
+    show["base_url"] = "https://new.example.org/show"
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "feed.xml").write_text("stale")
+    with pytest.raises(ValueError, match="already exists"):
+        import_archive(show, manifest)
+
+
+def test_import_archive_overwrite_replaces_a_previous_import(tmp_path):
+    manifest = make_archive(tmp_path)
+    identity = archive_identity(manifest)
+    show = new_show(**identity)
+    show.update(identity)
+    show["output_dir"] = str(tmp_path / "out")
+    show["base_url"] = "https://new.example.org/show"
+    out = tmp_path / "out"
+    (out / "audio").mkdir(parents=True)
+    (out / "feed.xml").write_text("stale")
+    (out / "audio" / "leftover.mp3").write_bytes(b"old")
+    show, episodes, template = import_archive(show, manifest, overwrite=True)
+    assert len(episodes) == 1
+    assert (out / "audio" / "ep1.mp3").is_file()
+    assert not (out / "audio" / "leftover.mp3").exists()
+
+
 def test_archive_feed_writes_manifest(tmp_path, monkeypatch):
     from termicast import validation
     from termicast.archive import archive_feed

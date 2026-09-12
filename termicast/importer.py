@@ -243,9 +243,24 @@ def _check_name_destinations(assets, slugs):
                 raise ValueError(f"Episode name {slug} is already taken by {existing}")
 
 
+def _clear_previous_import(output, assets):
+    """Remove a previous Termicast-managed import so a fresh one can replace it.
+
+    Only feed.xml and the managed asset folders are touched; anything else the
+    user placed in the output directory is left alone.
+    """
+    feed_path = output / "feed.xml"
+    if feed_path.is_file() or feed_path.is_symlink():
+        feed_path.unlink()
+    for folder in ("audio", "images", "transcripts", "chapters"):
+        target = assets / folder
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+
+
 def download_import(show, template, review_titles=None, review_optional=None, resolve_optional=None,
                     preseed=None, require_preseed=False, review_artwork=None, naming=None,
-                    naming_fallback="position"):
+                    naming_fallback="position", overwrite=False):
     """Stage every supported asset before installing a new public directory.
 
     The original XML stays untouched. Exact URL substitutions are persisted in
@@ -259,6 +274,8 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     sequential slug instead of the hash of its source URL; None keeps the hash
     names. `naming_fallback` ("position" or "keep") decides what happens to
     episodes whose feed declares no episode number.
+    `overwrite`, when True, replaces an existing feed.xml (and the managed
+    asset folders alongside it) instead of refusing to import over it.
     """
     errors = validation.validate_show(show)
     if errors:
@@ -268,11 +285,13 @@ def download_import(show, template, review_titles=None, review_optional=None, re
     assets = asset_root(show)
     if (not show.get("hosting") and output.exists()) or output.is_symlink():
         raise ValueError("Import requires a new, nonexistent output directory")
-    if (output / "feed.xml").exists() or (output / "feed.xml").is_symlink():
-        raise ValueError("Destination feed.xml already exists")
     for root_path in (output, assets):
         if any(p.is_symlink() for p in (root_path, *root_path.parents)):
             raise ValueError("Import destinations must not use symbolic links")
+    if (output / "feed.xml").exists() or (output / "feed.xml").is_symlink():
+        if not overwrite:
+            raise ValueError("Destination feed.xml already exists")
+        _clear_previous_import(output, assets)
     if show.get("hosting") == "s3":
         from .s3deploy import check_s3_destination
         check_s3_destination(show)

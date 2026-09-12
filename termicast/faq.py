@@ -70,9 +70,11 @@ Three things to know:
   directories that cached the old URL will get 404s; copies already downloaded
   keep working. Termicast warns and asks for confirmation.
 - On **S3** hosting without *Keep a local copy of media*, the local file is
-  deleted after upload, so there is nothing left to rename. Enable that setting,
-  or restore from a `backup --include-media` archive, first. The old S3 objects
-  are never deleted, and the new names are not public until the next deploy.
+  deleted after upload, so Termicast renames the S3 object directly instead of
+  moving a local file; the old object is deleted immediately and the new name
+  is public right away. When a local copy exists, Termicast renames it and the
+  new name is uploaded on the next deploy, but the old S3 object is not
+  deleted.
 - If the process is interrupted mid-rename, **Check And Repair** reports any
   file the feed references but cannot find.
 
