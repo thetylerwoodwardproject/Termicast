@@ -5,7 +5,7 @@ import pytest
 from termicast.media import (
     identify_files, prepare_media, content_type_for, ENCLOSURE_TYPES,
     AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, TRANSCRIPT_EXTENSIONS,
-    _prepare_image, _prepare_audio,
+    _prepare_image, _prepare_audio, _prepare_transcript, transcript_type,
 )
 from termicast.models import new_show
 from conftest import make_wav, make_png, make_jpg, make_vtt
@@ -17,6 +17,19 @@ FFMPEG = shutil.which("ffmpeg") and shutil.which("ffprobe")
 def test_identify_files():
     roles = identify_files(["a.mp3", "b.jpg", "c.vtt"])
     assert roles == {"audio": "a.mp3", "image": "b.jpg", "transcript": "c.vtt"}
+
+
+def test_identify_files_accepts_srt_transcript():
+    roles = identify_files(["a.mp3", "c.srt"])
+    assert roles["transcript"] == "c.srt"
+
+
+def test_prepare_transcript_converts_srt(tmp_path):
+    source = tmp_path / "sub.srt"
+    source.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n", encoding="utf-8")
+    dest, relative, _, _ = _prepare_transcript(str(source), tmp_path, "s01e001")
+    assert relative == "transcripts/s01e001.vtt"
+    assert dest.read_text(encoding="utf-8").startswith("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\n")
 
 
 def test_identify_files_requires_audio():
@@ -43,10 +56,18 @@ def test_content_type_for():
     assert content_type_for("feed.xml") == "application/rss+xml"
     assert content_type_for("chapters/x.json") == "application/json+chapters"
     assert content_type_for("transcripts/x.vtt") == "text/vtt"
+    assert content_type_for("transcripts/x.srt") == "application/x-subrip"
     assert content_type_for("audio/x.mp3") == "audio/mpeg"
     assert content_type_for("audio/x.m4a") == "audio/mp4"
     assert content_type_for("images/x.jpg") == "image/jpeg"
     assert content_type_for("audio/x.unknown") is None
+
+
+def test_transcript_type_by_suffix():
+    assert transcript_type("https://e.org/t.vtt") == "text/vtt"
+    assert transcript_type("https://e.org/t.srt") == "application/x-subrip"
+    assert transcript_type("https://e.org/t.json") == "application/json"
+    assert transcript_type("https://e.org/t") == "text/vtt"
 
 
 def test_enclosure_types():
@@ -54,7 +75,7 @@ def test_enclosure_types():
     assert ENCLOSURE_TYPES[".flac"] == "audio/flac"
     assert set(AUDIO_EXTENSIONS) >= {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"}
     assert set(IMAGE_EXTENSIONS) == {".jpg", ".jpeg", ".png"}
-    assert TRANSCRIPT_EXTENSIONS == {".vtt"}
+    assert TRANSCRIPT_EXTENSIONS == {".vtt", ".srt"}
 
 
 @pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")

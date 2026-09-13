@@ -330,3 +330,66 @@ def test_downloaded_audio_keeps_deliverable_suffixes(tmp_path, monkeypatch, suff
     expected = suffix if suffix != ".bin" else ".mp3"
     assert staged.endswith(expected), staged
     assert content_type_for("audio/x" + expected) == content_type
+
+
+def test_linked_srt_transcript_is_kept_as_subrip(tmp_path, monkeypatch):
+    """SubRip is a valid podcast:transcript format, so import keeps it as SubRip."""
+    from termicast import importer, validation
+    from termicast.media import transcript_type
+
+    transcript = "https://old.example.org/transcripts/ep1.srt"
+    feed = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"'
+        ' xmlns:podcast="https://podcastindex.org/namespace/1.0">'
+        '<channel><title>S</title><description>d</description><link>https://old.example.org</link>'
+        '<item><title>Ep</title><guid isPermaLink="false">ep-1</guid><description>d</description>'
+        '<enclosure url="https://old.example.org/audio/ep1.mp3" length="1234" type="audio/mpeg"/>'
+        f'<podcast:transcript url="{transcript}" type="application/x-subrip"/>'
+        '<pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>'
+        '<itunes:duration>60</itunes:duration>'
+        '</item></channel></rss>'
+    ).encode()
+
+    srt = b"1\r\n00:00:01,000 --> 00:00:04,000\r\nHello\r\n"
+    monkeypatch.setattr(validation, "_download", lambda u, handle, limit, progress=None:
+                        handle.write(srt if u.endswith(".srt") else b"fake-audio"))
+    monkeypatch.setattr(validation, "probe_local_media",
+                        lambda path: {"length": 10, "duration": 60.0})
+
+    show = new_show(title="S", description="d", base_url="https://new.example.org/show",
+                    output_dir=str(tmp_path / "out"))
+    show, episodes = importer.download_import(show, feed)
+
+    staged = episodes[0]["transcript_url"]
+    assert staged.endswith(".srt"), staged
+    assert transcript_type(staged) == "application/x-subrip"
+    relative = staged.split("/show/", 1)[1]
+    assert (tmp_path / "out" / relative).read_bytes() == srt
+
+
+def test_linked_srt_transcript_without_cues_is_rejected(tmp_path, monkeypatch):
+    from termicast import importer, validation
+
+    feed = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"'
+        ' xmlns:podcast="https://podcastindex.org/namespace/1.0">'
+        '<channel><title>S</title><description>d</description><link>https://old.example.org</link>'
+        '<item><title>Ep</title><guid isPermaLink="false">ep-1</guid><description>d</description>'
+        '<enclosure url="https://old.example.org/audio/ep1.mp3" length="1234" type="audio/mpeg"/>'
+        '<podcast:transcript url="https://old.example.org/transcripts/ep1.srt" type="application/x-subrip"/>'
+        '<pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>'
+        '<itunes:duration>60</itunes:duration>'
+        '</item></channel></rss>'
+    ).encode()
+
+    monkeypatch.setattr(validation, "_download", lambda u, handle, limit, progress=None:
+                        handle.write(b"<html>not a transcript</html>" if u.endswith(".srt") else b"fake-audio"))
+    monkeypatch.setattr(validation, "probe_local_media",
+                        lambda path: {"length": 10, "duration": 60.0})
+
+    show = new_show(title="S", description="d", base_url="https://new.example.org/show",
+                    output_dir=str(tmp_path / "out"))
+    with pytest.raises(ValueError, match="SubRip"):
+        importer.download_import(show, feed)

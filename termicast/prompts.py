@@ -396,11 +396,11 @@ PROMPT_EXAMPLES = {
     "chapter artwork url": "https://media.example.com/my-show/images/chapter-1.png",
     "chapter link": "https://example.com/my-show/notes#chapter-1",
     "chapter json path or https url": "/home/alex/podcast/chapters.json or https://example.com/chapters.json",
-    "vtt path or https url": "/home/alex/podcast/episode-42.vtt or https://example.com/episode-42.vtt",
+    "vtt/srt path or https url": "/home/alex/podcast/episode-42.vtt or https://example.com/episode-42.srt",
     "slug": "s02ep042 or the-hidden-cost-of-internet",
     "audio file path": "/home/alex/podcast/episode-42.mp3",
     "artwork file path": "/home/alex/podcast/cover.png",
-    "transcript file path": "/home/alex/podcast/episode-42.vtt",
+    "transcript file path": "/home/alex/podcast/episode-42.vtt or /home/alex/podcast/episode-42.srt",
 }
 
 PROMPT_HELP = {
@@ -880,7 +880,7 @@ def optional_assets(episode, show):
     from .models import chapters_relative
 
     action = menu("Optional assets", ["Chapters JSON (local path or HTTPS URL)",
-                                      "Chapters manually", "Transcript VTT (local path or HTTPS URL)", "Back"], 4)
+                                      "Chapters manually", "Transcript VTT/SRT (local path or HTTPS URL)", "Back"], 4)
     try:
         if action == 1:
             value = read_chapters(text("Chapter JSON path or HTTPS URL", required=True), episode)
@@ -894,7 +894,7 @@ def optional_assets(episode, show):
                 episode["chapters"] = value
                 episode.setdefault("_replace_fields", []).append("chapters")
         elif action == 3:
-            value = check_vtt(read_asset(text("VTT path or HTTPS URL", required=True)))
+            value = check_vtt(read_asset(text("VTT/SRT path or HTTPS URL", required=True)))
             from .storage import asset_root, asset_url
             filename = chapters_relative(episode).split("/", 1)[1]
             url = asset_url(show, "transcripts/" + filename)
@@ -1024,8 +1024,8 @@ def episode_form(show, publisher, db):
         paths = [text("Audio file path (mp3, wav, flac, m4a, ogg, opus)", required=True)]
         if confirm("Add cover artwork file?", False):
             paths.append(text("Artwork file path (JPEG/PNG)", required=True))
-        if confirm("Add a WebVTT transcript file?", False):
-            paths.append(text("Transcript file path (.vtt)", required=True))
+        if confirm("Add a transcript file (WebVTT or SubRip)?", False):
+            paths.append(text("Transcript file path (.vtt or .srt)", required=True))
     except Cancelled:
         console.print("Cancelled. No episode was added.")
         return

@@ -417,9 +417,19 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                                 chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
                         atomic_write(local_paths[url], (json.dumps(payload, allow_nan=False, indent=2) + "\n").encode())
                         return chapters
-                    if Path(urlsplit(url).path).suffix.lower() == ".vtt":
+                    suffix = Path(urlsplit(url).path).suffix.lower()
+                    if suffix == ".vtt":
                         from .assets import check_vtt
-                        check_vtt(local_paths[url].read_text(encoding="utf-8-sig"))
+                        staged = local_paths[url]
+                        original = staged.read_text(encoding="utf-8-sig")
+                        text = check_vtt(original)
+                        if text != original:
+                            atomic_write(staged, text.encode("utf-8"))
+                    elif suffix == ".srt":
+                        # SubRip is a transcript format of its own; the feed links
+                        # it as application/x-subrip rather than converting it.
+                        from .assets import check_srt
+                        check_srt(local_paths[url].read_text(encoding="utf-8-sig"))
                     elif not local_paths[url].stat().st_size:
                         raise ValueError("Linked transcript is empty")
                     return result

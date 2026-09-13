@@ -102,7 +102,8 @@ termicast add <show-id> episode.mp3 artwork.jpg transcript.vtt --slug s02ep042
 ```
 
 Audio is required; artwork and transcript are optional and identified by their
-file type. Media files must be on the machine running Termicast.
+file type. Transcripts may be WebVTT or SubRip (`.srt`); a managed SubRip file
+is converted to WebVTT. Media files must be on the machine running Termicast.
 
 ## 🧭 Commands
 

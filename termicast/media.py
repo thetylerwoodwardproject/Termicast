@@ -14,13 +14,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from urllib.parse import urlsplit
 
 from .storage import asset_root
 
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-TRANSCRIPT_EXTENSIONS = {".vtt"}
+TRANSCRIPT_EXTENSIONS = {".vtt", ".srt"}
 
 # RSS-deliverable enclosure formats used by keep-audio and feed generation.
 ENCLOSURE_TYPES = {
@@ -50,7 +51,7 @@ _OTHER_TYPES = {
     ".vtt": "text/vtt",
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".png": "image/png", ".json": "application/json",
-    ".srt": "text/plain", ".txt": "text/plain",
+    ".srt": "application/x-subrip", ".txt": "text/plain",
     ".html": "text/html", ".pdf": "application/pdf",
 }
 
@@ -65,6 +66,19 @@ DEFAULT_SUFFIXES = {"audio": ".mp3", "chapters": ".json", "transcripts": ".vtt"}
 
 def default_suffix(folder):
     return DEFAULT_SUFFIXES.get(folder, ".img")
+
+
+# podcast:transcript formats the Podcast Namespace accepts. Managed transcripts
+# are WebVTT; imported ones keep whatever format the source feed linked.
+TRANSCRIPT_TYPES = {
+    ".vtt": "text/vtt", ".srt": "application/x-subrip", ".txt": "text/plain",
+    ".html": "text/html", ".htm": "text/html", ".json": "application/json",
+}
+
+
+def transcript_type(url):
+    """Declared type for a transcript URL; WebVTT when the suffix says nothing."""
+    return TRANSCRIPT_TYPES.get(Path(urlsplit(url).path).suffix.lower(), "text/vtt")
 
 
 def content_type_for(relative_path):
@@ -152,7 +166,7 @@ def identify_files(paths):
         elif suffix in TRANSCRIPT_EXTENSIONS:
             roles["transcript"].append(str(path))
         else:
-            raise ValueError(f"Unsupported file type for {path}: expected audio, image, or .vtt transcript")
+            raise ValueError(f"Unsupported file type for {path}: expected audio, image, or a .vtt/.srt transcript")
     if not roles["audio"]:
         raise ValueError("Audio is required for a new episode")
     if len(roles["audio"]) > 1:
@@ -407,8 +421,8 @@ def _prepare_transcript(source, dest_dir, slug, update=None):
     from .publisher import atomic_write
     source = Path(source)
     before = source.stat().st_size
-    text = source.read_text(encoding="utf-8-sig")
-    check_vtt(text)
+    # SubRip and headerless cues are converted; the installed file is always WebVTT.
+    text = check_vtt(source.read_text(encoding="utf-8-sig"))
     dest = dest_dir / (slug + ".vtt")
     atomic_write(dest, text.encode("utf-8"))
     return dest, f"transcripts/{dest.name}", before, dest.stat().st_size

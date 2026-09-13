@@ -177,7 +177,8 @@ Audio file path (mp3, wav, flac, m4a, ogg, opus):
 Then it asks (optional):
 
 - **Cover artwork** — a JPEG or PNG image for the episode.
-- **Transcript** — a `.vtt` subtitles file, if you have one.
+- **Transcript** — a `.vtt` or `.srt` subtitles file, if you have one.
+  SubRip is converted to WebVTT for the managed copy.
 
 Next you may enter a **season number** and **episode number** (both optional).
 Termicast suggests a name like `s02ep042` for the episode's files — you can
