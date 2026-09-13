@@ -18,7 +18,7 @@ from .prompts import (
     ACCENT, confirm, console, edit_field, error, menu, show_banner, show_form, show_summary, text,
     warning, menu_utilities, show_faq, Cancelled, ExitRequested, edit_episode_form,
     optional_assets, add_episode, episode_form, hosting_menu,
-    DEPLOYED, DRY_RUN_DONE, DESTINATION_SETTINGS, hosting_label,
+    DEPLOYED, DRY_RUN_DONE, DESTINATION_SETTINGS, hosting_label, run_menu,
 )
 
 # .feed, .publisher, .importer and friends pull in lxml and the rest of the
@@ -26,22 +26,6 @@ from .prompts import (
 # where they are used -- the same convention .archive and .s3deploy already
 # follow below -- to keep startup cheap for the scriptable commands.
 
-
-def _describe_action_error(exc):
-    """Render an exception for the "Action failed" banner.
-
-    A bare PermissionError just names the path it couldn't write to (e.g. a
-    hidden staging directory next to the output folder), which reads as
-    baffling. Point at the directory that actually needs write access instead.
-    """
-    if isinstance(exc, PermissionError) and exc.filename:
-        path = Path(exc.filename)
-        directory = path if path.is_dir() else path.parent
-        return (f"Action failed: no write permission for {directory} "
-                f"(needed to create {path.name} there). Grant your account write "
-                f"access to that directory, e.g. `sudo chown \"$USER\" {directory}`, "
-                "then try again.")
-    return f"Action failed: {exc}"
 
 
 def _artwork_reviewer():
@@ -251,17 +235,12 @@ def _episodes(db, publisher, show):
 
 
 def _tools(db, publisher, show):
-    while True:
-        action = menu("Tools", ["Check And Repair", "Regenerate feed", "Import episode CSV",
-                                "Export episode CSV", "Migration guidance", "Back"])
-        if action == 6:
-            return
-        try:
-            _tool_action(db, publisher, show, action)
-        except Cancelled:
-            console.print("Cancelled. Nothing was changed.")
-        if action == 1:
-            show = db.get_show(show["id"])
+    state = {"show": show}
+    run_menu("Tools", ["Check And Repair", "Regenerate feed", "Import episode CSV",
+                       "Export episode CSV", "Migration guidance", "Back"],
+             lambda action: _tool_action(db, publisher, state["show"], action),
+             back=6,
+             refresh=lambda: state.update(show=db.get_show(show["id"])))
 
 
 def _tool_action(db, publisher, show, action):
@@ -288,37 +267,37 @@ def _tool_action(db, publisher, show, action):
 
 
 def _open_show(db, publisher, show):
-    while True:
-        show = db.get_show(show["id"])
-        show_summary(db, show)
-        action = menu("CONTROL ROOM / Choose a number",
-                      ["New episode", "Episodes", "Podcast settings",
-                       "Hosting", "Tools", "Switch podcast / Back"],
-                      headers={0: "PUBLISH & MANAGE", 2: "CONFIGURATION",
-                               4: "TOOLS", 5: "SESSION"})
-        try:
-            if action == 6:
-                return
-            if action == 1:
-                episode_form(show, publisher, db)
-            elif action == 2:
-                _episodes(db, publisher, show)
-            elif action == 3:
-                updated = show_form(show)
-                if updated is not None:
-                    db.save_show(updated)
-                    publisher.regenerate(updated["id"])
-                    console.print("Settings saved and feed regenerated.", style=ACCENT)
-            elif action == 4:
-                hosting_menu(db, publisher, show)
-            elif action == 5:
-                _tools(db, publisher, show)
-        except EOFError:
-            raise
-        except Cancelled:
-            console.print("Cancelled. Nothing was changed.")
-        except Exception as exc:
-            error(_describe_action_error(exc))
+    state = {"show": show}
+
+    def reload():
+        state["show"] = db.get_show(show["id"])
+        show_summary(db, state["show"])
+
+    run_menu("CONTROL ROOM / Choose a number",
+             ["New episode", "Episodes", "Podcast settings",
+              "Hosting", "Tools", "Switch podcast / Back"],
+             lambda action: _open_show_action(db, publisher, state["show"], action),
+             back=6,
+             headers={0: "PUBLISH & MANAGE", 2: "CONFIGURATION", 4: "TOOLS", 5: "SESSION"},
+             refresh=reload)
+
+
+def _open_show_action(db, publisher, show, action):
+    """Run one CONTROL ROOM action; the caller reports failures."""
+    if action == 1:
+        episode_form(show, publisher, db)
+    elif action == 2:
+        _episodes(db, publisher, show)
+    elif action == 3:
+        updated = show_form(show)
+        if updated is not None:
+            db.save_show(updated)
+            publisher.regenerate(updated["id"])
+            console.print("Settings saved and feed regenerated.", style=ACCENT)
+    elif action == 4:
+        hosting_menu(db, publisher, show)
+    elif action == 5:
+        _tools(db, publisher, show)
 
 
 def _pick_output_dir(destination):
@@ -566,34 +545,30 @@ def _create_or_import(db, publisher, importing=False):
 
 def _interactive(db, publisher):
     show_banner()
-    while True:
-        action = menu("Termicast", ["Open podcast", "Import existing podcast", "Create podcast",
-                                    "Forget podcast", "Delete podcast", "Quit"])
-        try:
-            if action == 6:
-                return 0
-            if action == 1:
-                show = _select_show(db)
-                if show:
-                    _open_show(db, publisher, show)
-            elif action in (2, 3):
-                _create_or_import(db, publisher, importing=action == 2)
-            elif action == 4:
-                show = _select_show(db, "Forget podcast")
-                if show and confirm(f"Forget {show['title']} and its managed drafts? "
-                                    "Feed and chapter files will NOT be deleted."):
-                    db.forget_show(show["id"])
-                    console.print("Podcast forgotten. Output files were not deleted.", style=ACCENT)
-            elif action == 5:
-                show = _select_show(db, "Delete podcast")
-                if show:
-                    _delete_show(db, show)
-        except EOFError:
-            raise
-        except Cancelled:
-            console.print("Cancelled. Nothing was changed.")
-        except Exception as exc:
-            error(_describe_action_error(exc))
+    run_menu("Termicast", ["Open podcast", "Import existing podcast", "Create podcast",
+                           "Forget podcast", "Delete podcast", "Quit"],
+             lambda action: _top_level_action(db, publisher, action), back=6)
+    return 0
+
+
+def _top_level_action(db, publisher, action):
+    """Run one top-level menu action; the caller reports failures."""
+    if action == 1:
+        show = _select_show(db)
+        if show:
+            _open_show(db, publisher, show)
+    elif action in (2, 3):
+        _create_or_import(db, publisher, importing=action == 2)
+    elif action == 4:
+        show = _select_show(db, "Forget podcast")
+        if show and confirm(f"Forget {show['title']} and its managed drafts? "
+                            "Feed and chapter files will NOT be deleted."):
+            db.forget_show(show["id"])
+            console.print("Podcast forgotten. Output files were not deleted.", style=ACCENT)
+    elif action == 5:
+        show = _select_show(db, "Delete podcast")
+        if show:
+            _delete_show(db, show)
 
 
 def _delete_show(db, show):

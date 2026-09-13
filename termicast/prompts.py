@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 import math
 import os
+from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo
 
@@ -55,7 +56,6 @@ def show_banner():
 
 def show_summary(db, show):
     """Print a status box for the open show: episodes, schedule, hosting, feed."""
-    from pathlib import Path
     episodes = db.list_episodes(show["id"])
     scheduled = sum(1 for e in episodes if e.get("status") == "scheduled")
     from .storage import asset_root
@@ -93,6 +93,56 @@ def menu_utilities(backup_action):
         yield
     finally:
         _backup_action.reset(token)
+
+
+def describe_action_error(exc):
+    """Turn an exception from a menu action into something actionable.
+
+    A bare PermissionError just names the path it couldn't write to (e.g. a
+    hidden staging directory next to the output folder), which reads as
+    baffling. Point at the directory that actually needs write access instead.
+    """
+    if isinstance(exc, PermissionError) and exc.filename:
+        path = Path(exc.filename)
+        directory = path if path.is_dir() else path.parent
+        return (f"Action failed: no write permission for {directory} "
+                f"(needed to create {path.name} there). Grant your account write "
+                f"access to that directory, e.g. `sudo chown \"$USER\" {directory}`, "
+                "then try again.")
+    return f"Action failed: {exc}"
+
+
+def run_menu(title, options, dispatch, *, back, headers=None, refresh=None,
+             cancelled="Cancelled. Nothing was changed.", on_error=None):
+    """Drive a numbered menu until `back` is chosen, under one error policy.
+
+    `refresh` runs at the top of each iteration, before the menu is drawn,
+    for loops that re-read their subject or reprint a summary.
+
+    Four loops open-coded this with arms that disagreed: only two reached
+    describe_action_error, one had no `except Exception` at all (so a failed
+    action unwound past its own submenu), and the EOFError arm was present in
+    cli.py but not in hosting_menu -- and EOFError, unlike Cancelled and
+    ExitRequested, derives from Exception, so a bare `except Exception`
+    swallows it and Ctrl-D reads as a failed action instead of an exit.
+    """
+    while True:
+        if refresh is not None:
+            refresh()
+        action = menu(title, options, headers=headers)
+        if action == back:
+            return
+        try:
+            dispatch(action)
+        except EOFError:
+            raise
+        except Cancelled:
+            console.print(cancelled)
+        except Exception as exc:
+            if on_error is None:
+                error(describe_action_error(exc))
+            else:
+                on_error(action, exc)
 
 
 def show_faq():
@@ -1198,73 +1248,90 @@ def correct_host_mime(db, show):
     return True
 
 
+HOSTING_OPTIONS = ["Configure hosting", "Deploy", "Deploy (dry run)",
+                   "Hosting checks (doctor)", "Nginx MIME snippet",
+                   "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
+                   "Migration guidance", "Back", "Correct host MIME types",
+                   "S3 credentials"]
+
+
 def hosting_menu(db, publisher, show):
-    """Hosting submenu: setup, deploy, checks, and guidance."""
+    """Hosting submenu: setup, deploy, checks, and guidance.
+
+    "Back" stays at 9 with two options after it. The numbering is what users
+    and the docs know, so run_menu takes the back index rather than forcing
+    the entry to the end.
+    """
+    state = {"show": show}
+    run_menu("Hosting", HOSTING_OPTIONS,
+             lambda action: _hosting_action(db, publisher, state, action),
+             back=9,
+             cancelled="Cancelled. Hosting settings are unchanged.",
+             on_error=lambda action, exc: _hosting_error(db, state["show"], action, exc))
+
+
+def _hosting_action(db, publisher, state, action):
+    """Run one Hosting action; the caller reports failures."""
     from .hosting import (apache_snippet, doctor, is_mime_problem, nginx_snippet,
-                          s3_write_policy_snippet)
-    while True:
-        action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
-                                  "Hosting checks (doctor)", "Nginx MIME snippet",
-                                  "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
-                                  "Migration guidance", "Back", "Correct host MIME types",
-                                  "S3 credentials"])
+                          s3_write_policy_snippet, summarize_verification_problems)
+    show = state["show"]
+    if action == 1:
+        data = dict(show)
+        hosting_form(data)
+        if data.get("hosting") == "s3":
+            from .s3deploy import check_s3_access
+            check_s3_access(data)
+        db.save_show(data)
+        publisher.regenerate(show["id"])
+        state["show"] = data
+        console.print("Hosting settings saved.", style=ACCENT)
+    elif action == 2:
+        publisher.deploy(show["id"])
+        console.print(DEPLOYED, style=ACCENT)
+    elif action == 3:
+        publisher.deploy(show["id"], dry_run=True)
+        console.print(DRY_RUN_DONE, style=ACCENT)
+    elif action == 4:
+        problems = doctor(db, show["id"])
+        if problems:
+            for line in summarize_verification_problems(problems, target="mixed"):
+                warning(line)
+            if any(is_mime_problem(p) for p in problems):
+                _offer_mime_correction(db, show)
+        else:
+            console.print("No hosting problems found.", style=ACCENT)
+    elif action == 5:
+        console.print(nginx_snippet(show), markup=False)
+    elif action == 6:
+        console.print(apache_snippet(show), markup=False)
+    elif action == 7:
+        if show.get("hosting") != "s3":
+            warning("This show isn't using S3 hosting; no bucket policy applies.")
+        else:
+            console.print(s3_write_policy_snippet(show), markup=False)
+    elif action == 8:
+        from .migration import migration_guidance
+        console.print(migration_guidance(show), markup=False)
+    elif action == 10:
+        correct_host_mime(db, show)
+    elif action == 11:
+        set_s3_credentials()
+
+
+def _offer_mime_correction(db, show):
+    """Offer the guided host correction; declining is not an error."""
+    if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
+        correct_host_mime(db, show)
+
+
+def _hosting_error(db, show, action, exc):
+    """Report a failed hosting action, offering MIME repair after a deploy."""
+    from .hosting import is_mime_problem
+    error(f"Hosting action failed: {exc}")
+    if action == 2 and is_mime_problem(exc):
         try:
-            if action == 9:
-                return
-            if action == 1:
-                data = dict(show)
-                hosting_form(data)
-                if data.get("hosting") == "s3":
-                    from .s3deploy import check_s3_access
-                    check_s3_access(data)
-                db.save_show(data)
-                publisher.regenerate(show["id"])
-                show = data
-                console.print("Hosting settings saved.", style=ACCENT)
-            elif action == 2:
-                publisher.deploy(show["id"])
-                console.print(DEPLOYED, style=ACCENT)
-            elif action == 3:
-                publisher.deploy(show["id"], dry_run=True)
-                console.print(DRY_RUN_DONE, style=ACCENT)
-            elif action == 4:
-                problems = doctor(db, show["id"])
-                if problems:
-                    from .hosting import summarize_verification_problems
-                    for line in summarize_verification_problems(problems, target="mixed"):
-                        warning(line)
-                    if any(is_mime_problem(p) for p in problems):
-                        if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
-                            correct_host_mime(db, show)
-                else:
-                    console.print("No hosting problems found.", style=ACCENT)
-            elif action == 5:
-                console.print(nginx_snippet(show), markup=False)
-            elif action == 6:
-                console.print(apache_snippet(show), markup=False)
-            elif action == 7:
-                if show.get("hosting") != "s3":
-                    warning("This show isn't using S3 hosting; no bucket policy applies.")
-                else:
-                    console.print(s3_write_policy_snippet(show), markup=False)
-            elif action == 8:
-                from .migration import migration_guidance
-                console.print(migration_guidance(show), markup=False)
-            elif action == 10:
-                correct_host_mime(db, show)
-            elif action == 11:
-                set_s3_credentials()
-        except ExitRequested:
-            raise
+            _offer_mime_correction(db, show)
         except Cancelled:
-            console.print("Cancelled. Hosting settings are unchanged.")
-        except Exception as exc:
-            error(f"Hosting action failed: {exc}")
-            if action == 2 and is_mime_problem(exc):
-                try:
-                    if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
-                        correct_host_mime(db, show)
-                except Cancelled:
-                    console.print("Correction cancelled.")
-                except Exception as repair_exc:
-                    error(f"MIME correction failed: {repair_exc}")
+            console.print("Correction cancelled.")
+        except Exception as repair_exc:
+            error(f"MIME correction failed: {repair_exc}")

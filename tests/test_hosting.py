@@ -254,3 +254,26 @@ def test_asset_urls_skips_already_verified(show):
         show, [episode], skip={"https://example.org/show/audio/e1.mp3"})]
     assert "https://example.org/show/audio/e1.mp3" not in remaining
     assert "https://example.org/show/transcripts/e1.vtt" in remaining
+
+
+def test_hosting_menu_exits_on_eof_instead_of_spinning(monkeypatch):
+    """Ctrl-D must leave the hosting menu, not restart it forever.
+
+    EOFError derives from Exception, unlike Cancelled and ExitRequested, so
+    the menu's bare `except Exception` swallowed it, redrew, read EOF again,
+    and looped printing "Hosting action failed:" until interrupted.
+    """
+    import itertools
+    from unittest.mock import Mock
+    from termicast import prompts
+
+    draws = itertools.count()
+    def fake_menu(title, options, default=None, headers=None):
+        assert next(draws) < 5, "hosting menu redrew after EOF"
+        return 2  # Deploy
+    monkeypatch.setattr(prompts, "menu", fake_menu)
+    publisher = Mock()
+    publisher.deploy.side_effect = EOFError()
+
+    with pytest.raises(EOFError):
+        prompts.hosting_menu(Mock(), publisher, {"id": "001"})

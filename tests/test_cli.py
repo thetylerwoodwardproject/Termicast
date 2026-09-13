@@ -347,12 +347,14 @@ def test_hosting_banner_prints_before_regeneration(monkeypatch, db, capsys):
 # --- "Delete podcast" ------------------------------------------------------
 
 def test_interactive_menu_offers_delete_podcast(monkeypatch, db):
+    from termicast import prompts
     from termicast.prompts import Cancelled
 
-    def fake_menu(title, options, default=None):
+    def fake_menu(title, options, default=None, headers=None):
         assert "Delete podcast" in options
         raise Cancelled()
-    monkeypatch.setattr(cli, "menu", fake_menu)
+    # The loop is driven by prompts.run_menu, so that is where menu resolves.
+    monkeypatch.setattr(prompts, "menu", fake_menu)
     with pytest.raises(Cancelled):
         cli._interactive(db, Mock())
 
