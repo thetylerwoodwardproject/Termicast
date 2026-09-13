@@ -199,3 +199,58 @@ def test_summarize_does_not_mutate_input():
     original = list(problems)
     hosting.summarize_verification_problems(problems, target="local")
     assert problems == original
+
+
+def test_check_urls_preserves_order_and_runs_concurrently(monkeypatch):
+    """Verification order must be stable, and the checks must overlap.
+
+    A 200-episode show is ~600 independent HEADs; serially that is minutes
+    of latency on every publish, so they run on a small pool. The reported
+    problems still have to come back in the order the URLs were given.
+    """
+    import threading
+    import time
+    from termicast import hosting
+
+    in_flight = 0
+    peak = 0
+    guard = threading.Lock()
+
+    def slow_check(url, expected=None):
+        nonlocal in_flight, peak
+        with guard:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        time.sleep(0.05)
+        with guard:
+            in_flight -= 1
+        return [f"problem: {url}"]
+
+    monkeypatch.setattr(hosting, "check_url", slow_check)
+    pairs = [(f"https://e.org/{i}.mp3", "audio/mpeg") for i in range(12)]
+
+    started = time.perf_counter()
+    problems = hosting.check_urls(pairs)
+    elapsed = time.perf_counter() - started
+
+    assert problems == [f"problem: https://e.org/{i}.mp3" for i in range(12)]
+    assert peak > 1, "checks ran serially"
+    assert elapsed < 0.05 * len(pairs) / 2
+
+
+def test_asset_urls_skips_already_verified(show):
+    """A deploy verifies what it uploaded; the sweep must not repeat those."""
+    from termicast.hosting import asset_urls
+
+    episode = {
+        "status": "published",
+        "mp3_url": "https://example.org/show/audio/e1.mp3",
+        "transcript_url": "https://example.org/show/transcripts/e1.vtt",
+    }
+    every = [url for url, _ in asset_urls(show, [episode])]
+    assert "https://example.org/show/audio/e1.mp3" in every
+
+    remaining = [url for url, _ in asset_urls(
+        show, [episode], skip={"https://example.org/show/audio/e1.mp3"})]
+    assert "https://example.org/show/audio/e1.mp3" not in remaining
+    assert "https://example.org/show/transcripts/e1.vtt" in remaining

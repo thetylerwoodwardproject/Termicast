@@ -82,15 +82,23 @@ def episode_asset_paths(episode, show=None):
     return paths
 
 
-def _verify_published_assets(show, episodes):
+def _verified_urls(show, relative_paths):
+    """Public URLs that deploy_paths already verified for these uploads."""
+    base = asset_base(show)
+    return {f"{base}/{relative}" for relative in relative_paths}
+
+
+def _verify_published_assets(show, episodes, skip=()):
     """Fail loudly if any published episode's assets aren't publicly reachable.
 
     A deploy that silently skips an asset type would otherwise report success;
-    this re-checks the full published set (not just the files this call
-    uploaded) so such a gap surfaces immediately.
+    this checks the full published set, not just the files this call uploaded,
+    so such a gap surfaces immediately. `skip` carries the URLs the upload
+    already verified: covering them twice doubles the request count without
+    widening the coverage this exists for.
     """
     from .hosting import check_assets, summarize_verification_problems
-    problems = check_assets(show, episodes)
+    problems = check_assets(show, episodes, skip=skip)
     if problems:
         raise RuntimeError("\n".join(summarize_verification_problems(problems, target="s3")))
 
@@ -270,7 +278,7 @@ class Publisher:
                 if show.get("mirror_feed"):
                     uploaded = list(uploaded) + list(mirror_feed(show, dry_run=dry_run, verify=verify))
                 if verify and not dry_run:
-                    _verify_published_assets(show, episodes)
+                    _verify_published_assets(show, episodes, skip=_verified_urls(show, uploaded))
                 return uploaded
             feed = asset_root(show) / "feed.xml"
             if not feed.is_file():
@@ -360,11 +368,11 @@ class Publisher:
             root = asset_root(show)
             if any((root / relative).is_file() for relative in paths):
                 check_s3_access(show)
-            upload_existing_assets(show, sorted(paths))
+            uploaded = upload_existing_assets(show, sorted(paths))
             published = [dict(json.loads(row["data"]), status=row["status"])
                          for row in snapshot["selected"] if row["status"] == "published"]
             if published:
-                _verify_published_assets(show, published)
+                _verify_published_assets(show, published, skip=_verified_urls(show, uploaded))
         except Exception as exc:
             raise RuntimeError(
                 f"Saved locally. Remote publication failed: {exc}. "

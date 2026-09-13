@@ -358,7 +358,7 @@ def test_s3_deploy_verify_reports_unreachable_published_asset(db, show, monkeypa
     from termicast import hosting, s3deploy
     monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: list(a[1]))
     monkeypatch.setattr(hosting, "check_assets",
-                        lambda s, e: ["Unreachable: https://cdn.example.org/show/audio/e1.mp3"])
+                        lambda s, e, skip=(): ["Unreachable: https://cdn.example.org/show/audio/e1.mp3"])
     with pytest.raises(RuntimeError, match="Unreachable"):
         Publisher(db).deploy(show["id"])
 
@@ -372,11 +372,14 @@ def test_s3_deploy_verify_passes_when_assets_reachable(db, show, monkeypatch):
     from termicast import hosting, s3deploy
     monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: list(a[1]))
     verified = []
-    monkeypatch.setattr(hosting, "check_assets", lambda s, e: verified.append(e) or [])
+    monkeypatch.setattr(hosting, "check_assets",
+                        lambda s, e, skip=(): verified.append((e, skip)) or [])
     result = Publisher(db).deploy(show["id"])
     assert result == ["audio/e1.mp3"]
     assert len(verified) == 1
-    assert verified[0][0]["mp3_url"]
+    assert verified[0][0][0]["mp3_url"]
+    # The upload already verified this URL, so the sweep must not recheck it.
+    assert verified[0][1] == {"https://cdn.example.org/show/audio/e1.mp3"}
 
 
 def test_s3_deploy_preflights_access_before_upload(db, show, monkeypatch):

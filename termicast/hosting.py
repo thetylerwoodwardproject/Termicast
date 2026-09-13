@@ -175,15 +175,46 @@ def _full_body(url):
         return None
 
 
-def check_assets(show, episodes) -> list[str]:
-    """Check accessibility and MIME types of managed published assets."""
-    from .media import content_type_for
+# Each check is one HEAD against object storage, and they are independent.
+# Run a bounded number at once: a 200-episode show is ~600 checks, and
+# serially that is minutes of latency on every publish.
+VERIFY_WORKERS = 12
+
+
+def check_urls(pairs) -> list[str]:
+    """Check many (url, expected_content_type) pairs, in the order given.
+
+    urllib opens a fresh connection per request and offers no keep-alive, so
+    concurrency -- not connection reuse -- is what makes a large catalogue
+    verifiable in reasonable time.
+    """
+    pairs = list(pairs)
+    if not pairs:
+        return []
+    if len(pairs) == 1:
+        return check_url(*pairs[0])
+    from concurrent.futures import ThreadPoolExecutor
     problems = []
-    seen = set()
+    with ThreadPoolExecutor(max_workers=min(VERIFY_WORKERS, len(pairs))) as pool:
+        for found in pool.map(lambda pair: check_url(*pair), pairs):
+            problems.extend(found)
+    return problems
+
+
+def asset_urls(show, episodes, skip=()) -> list[tuple]:
+    """Managed published asset URLs and the Content-Type each should carry.
+
+    `skip` drops URLs a caller has already verified -- a deploy checks what
+    it just uploaded, so re-checking those in the full sweep doubles the
+    request count for no extra coverage.
+    """
+    from .media import content_type_for
+    pairs = []
+    seen = set(skip)
     base = asset_base(show)
-    if show.get("artwork_url"):
+    if show.get("artwork_url") and show["artwork_url"] not in seen:
         seen.add(show["artwork_url"])
-        problems.extend(check_url(show["artwork_url"], content_type_for(show["artwork_url"]) or "image/jpeg"))
+        pairs.append((show["artwork_url"], content_type_for(show["artwork_url"]) or "image/jpeg"))
     for episode in episodes:
         if episode.get("status") != "published":
             continue
@@ -205,8 +236,13 @@ def check_assets(show, episodes) -> list[str]:
             if url in seen:
                 continue
             seen.add(url)
-            problems.extend(check_url(url, expected))
-    return problems
+            pairs.append((url, expected))
+    return pairs
+
+
+def check_assets(show, episodes, skip=()) -> list[str]:
+    """Check accessibility and MIME types of managed published assets."""
+    return check_urls(asset_urls(show, episodes, skip))
 
 
 def doctor(db, show_id=None) -> list[str]:
