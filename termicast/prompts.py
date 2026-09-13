@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import math
+import os
 import sys
 from zoneinfo import ZoneInfo
 
@@ -657,7 +658,8 @@ def _ensure_s3_credentials():
     cfg_path = s3cfg_path()
     if cfg_path.exists():
         warning(f"{cfg_path} exists but Termicast can't find access_key/secret_key in it "
-                "under a [default] section; fix it manually, or the S3 check below will fail.")
+                "under a [default] section. Fix it manually, or use Hosting → S3 credentials "
+                "to re-enter the keys.")
         return
     if not confirm(f"No S3 credentials found. Create {cfg_path} now?", True):
         return
@@ -665,6 +667,33 @@ def _ensure_s3_credentials():
     secret_key = secret("Secret key")
     if not access_key or not secret_key:
         warning("Both keys are required; skipping ~/.s3cfg setup.")
+        return
+    write_s3cfg(access_key, secret_key)
+    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+
+
+def set_s3_credentials():
+    """Write ~/.s3cfg with freshly entered access/secret keys, via masked input.
+
+    Unlike `_ensure_s3_credentials`, this always prompts (replacing any existing
+    file after confirmation) so an account with an outdated or read-only key can
+    update it without hand-editing ~/.s3cfg.
+    """
+    from .s3deploy import s3_credentials_present, s3cfg_path, write_s3cfg
+    cfg_path = s3cfg_path()
+    if s3_credentials_present():
+        console.print(f"Existing S3 credentials found in {cfg_path}.", markup=False)
+    elif cfg_path.exists():
+        warning(f"{cfg_path} exists but has no [default] access_key/secret_key.")
+    if os.environ.get("S3_ACCESS_KEY") and os.environ.get("S3_SECRET_KEY"):
+        warning("S3_ACCESS_KEY/S3_SECRET_KEY environment variables are also set and "
+                "take precedence over ~/.s3cfg.")
+    if cfg_path.exists() and not confirm(f"Replace {cfg_path} with the keys you enter now?", True):
+        return
+    access_key = secret("Access key")
+    secret_key = secret("Secret key")
+    if not access_key or not secret_key:
+        warning("Both keys are required; ~/.s3cfg was not changed.")
         return
     write_s3cfg(access_key, secret_key)
     console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
@@ -1126,7 +1155,8 @@ def hosting_menu(db, publisher, show):
         action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
                                   "Hosting checks (doctor)", "Nginx MIME snippet",
                                   "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
-                                  "Migration guidance", "Back", "Correct host MIME types"])
+                                  "Migration guidance", "Back", "Correct host MIME types",
+                                  "S3 credentials"])
         try:
             if action == 9:
                 return
@@ -1172,6 +1202,8 @@ def hosting_menu(db, publisher, show):
                 console.print(migration_guidance(show), markup=False)
             elif action == 10:
                 correct_host_mime(db, show)
+            elif action == 11:
+                set_s3_credentials()
         except ExitRequested:
             raise
         except Cancelled:

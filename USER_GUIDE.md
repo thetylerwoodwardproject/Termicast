@@ -286,6 +286,7 @@ Under **4. Hosting** in your show's menu:
 | **7. S3 write-access policy** | A paste-in AWS IAM policy granting exactly the S3 access Termicast needs |
 | **8. Migration guidance** | Instructions for switching from another host |
 | **10. Correct host MIME types** | Detect local Nginx/Apache tools, add the podcast MIME mappings automatically, validate, and optionally reload and recheck |
+| **11. S3 credentials** | Re-enter the access/secret key (masked) and write them to `~/.s3cfg` |
 
 When the interactive Hosting checks or Deploy action reports incorrect MIME types,
 including `termicast deploy <show-id>` in a terminal,

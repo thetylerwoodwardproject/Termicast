@@ -1,5 +1,7 @@
 """Cancelling a field unwinds to the enclosing menu without changing the record."""
 
+from unittest.mock import Mock
+
 import pytest
 
 from termicast import prompts
@@ -173,3 +175,48 @@ def test_ensure_s3_credentials_requires_both_keys(monkeypatch, tmp_path):
     monkeypatch.setattr(prompts, "secret", lambda label: next(keys))
     prompts._ensure_s3_credentials()
     assert written == []
+
+
+def test_set_s3_credentials_replaces_existing_file(monkeypatch, tmp_path):
+    from termicast import s3deploy
+    cfg = tmp_path / ".s3cfg"
+    cfg.write_text("[default]\naccess_key = old\nsecret_key = old\n")
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: True)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: cfg)
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    written = []
+    monkeypatch.setattr(s3deploy, "write_s3cfg", lambda ak, sk: written.append((ak, sk)))
+    confirms = []
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: confirms.append(1) or True)
+    keys = iter(["new-access", "new-secret"])
+    monkeypatch.setattr(prompts, "secret", lambda label: next(keys))
+    prompts.set_s3_credentials()
+    assert written == [("new-access", "new-secret")]
+    assert confirms, "should confirm before overwriting an existing file"
+
+
+def test_set_s3_credentials_declines_without_changes(monkeypatch, tmp_path):
+    from termicast import s3deploy
+    cfg = tmp_path / ".s3cfg"
+    cfg.write_text("[default]\naccess_key = old\nsecret_key = old\n")
+    monkeypatch.setattr(s3deploy, "s3_credentials_present", lambda: True)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: cfg)
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    written = []
+    monkeypatch.setattr(s3deploy, "write_s3cfg", lambda ak, sk: written.append((ak, sk)))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: False)
+    monkeypatch.setattr(prompts, "secret", lambda label: "x")
+    prompts.set_s3_credentials()
+    assert written == []
+
+
+def test_hosting_menu_s3_credentials_action(monkeypatch):
+    from termicast import prompts
+    choices = iter([11, 9])
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: next(choices))
+    called = []
+    monkeypatch.setattr(prompts, "set_s3_credentials", lambda: called.append(1))
+    prompts.hosting_menu(Mock(), Mock(), {"id": "001"})
+    assert called == [1]
