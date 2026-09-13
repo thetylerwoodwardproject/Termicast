@@ -402,7 +402,7 @@ def test_delete_show_deletes_s3_prefix_before_local_and_db(db, monkeypatch, tmp_
     monkeypatch.setattr(cli, "text", lambda *a, **k: s3_show["id"])
     monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
     monkeypatch.setattr(s3deploy, "delete_prefix",
-                        lambda show, dry_run=False: calls.append(("s3", dry_run)) or 0)
+                        lambda show, dry_run=False, allow_empty_prefix=False: calls.append(("s3", dry_run)) or 0)
     monkeypatch.setattr(storage, "delete_local_assets",
                         lambda show, dry_run=False: calls.append(("local", dry_run)) or [])
 
@@ -423,7 +423,7 @@ def test_delete_show_does_not_touch_local_or_db_when_s3_preflight_fails(db, monk
     s3_show = db.save_show(record)
     (tmp_path / "out").mkdir(parents=True)
 
-    def fail_preflight(show, dry_run=False):
+    def fail_preflight(show, dry_run=False, allow_empty_prefix=False):
         raise RuntimeError("S3 credentials are not configured")
     monkeypatch.setattr(s3deploy, "delete_prefix", fail_preflight)
     local_delete = Mock()
@@ -437,3 +437,59 @@ def test_delete_show_does_not_touch_local_or_db_when_s3_preflight_fails(db, monk
     assert not text_calls
     local_delete.assert_not_called()
     assert db.get_show(s3_show["id"]) is not None
+
+
+def _bucket_root_show(db, tmp_path):
+    record = new_show(
+        title="Bucket Root Show", description="d", author="a", owner_name="o",
+        owner_email="o@example.org", website="https://example.org", category="Technology",
+        base_url="https://example.org", output_dir=str(tmp_path / "out"), timezone="UTC",
+        explicit=False, hosting="s3", bucket="my-bucket", prefix="",
+        asset_base_url="https://cdn.example.org",
+    )
+    show = db.save_show(record)
+    (tmp_path / "out").mkdir(parents=True)
+    return show
+
+
+def test_delete_show_bucket_root_cancelled_at_initial_warning(db, monkeypatch, tmp_path):
+    show = _bucket_root_show(db, tmp_path)
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: False)
+    delete_prefix_mock = Mock()
+    monkeypatch.setattr(s3deploy, "delete_prefix", delete_prefix_mock)
+
+    cli._delete_show(db, show)
+
+    delete_prefix_mock.assert_not_called()
+    assert db.get_show(show["id"]) is not None
+
+
+def test_delete_show_bucket_root_cancelled_on_wrong_bucket_name(db, monkeypatch, tmp_path):
+    show = _bucket_root_show(db, tmp_path)
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(cli, "text", lambda *a, **k: "wrong-bucket")
+    delete_prefix_mock = Mock()
+    monkeypatch.setattr(s3deploy, "delete_prefix", delete_prefix_mock)
+
+    cli._delete_show(db, show)
+
+    delete_prefix_mock.assert_not_called()
+    assert db.get_show(show["id"]) is not None
+
+
+def test_delete_show_bucket_root_deletes_when_fully_confirmed(db, monkeypatch, tmp_path):
+    show = _bucket_root_show(db, tmp_path)
+    confirms = iter([True, True])
+    texts = iter(["my-bucket", show["id"]])
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: next(confirms))
+    monkeypatch.setattr(cli, "text", lambda *a, **k: next(texts))
+    calls = []
+    monkeypatch.setattr(
+        s3deploy, "delete_prefix",
+        lambda show, dry_run=False, allow_empty_prefix=False: calls.append((dry_run, allow_empty_prefix)) or 0)
+    monkeypatch.setattr(storage, "delete_local_assets", lambda show, dry_run=False: [])
+
+    cli._delete_show(db, show)
+
+    assert calls == [(True, True), (False, True)]
+    assert db.get_show(show["id"]) is None

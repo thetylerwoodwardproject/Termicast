@@ -335,6 +335,20 @@ def test_delete_prefix_refuses_without_prefix(tmp_path, monkeypatch):
     run.assert_not_called()
 
 
+def test_delete_prefix_allows_empty_prefix_when_confirmed(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["prefix"] = ""
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "a.mp3\n", "")
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(side_effect=[listing, ok])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show, allow_empty_prefix=True) == 1
+    assert run.call_count == 2
+    del_args = run.call_args_list[1].args[0]
+    assert del_args[-1] == "s3://my-bucket/"
+
+
 def test_delete_prefix_returns_zero_when_empty(tmp_path, monkeypatch):
     show = s3_show(tmp_path)
     _with_credentials(monkeypatch)

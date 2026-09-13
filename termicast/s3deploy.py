@@ -321,18 +321,20 @@ def check_s3_access(show):
             "(or via S3_ACCESS_KEY/S3_SECRET_KEY). Configure hosting first.")
 
 
-def delete_prefix(show, dry_run=False):
+def delete_prefix(show, dry_run=False, allow_empty_prefix=False):
     """Delete every object under this show's S3 prefix; returns the object count.
 
-    Refuses outright when the show has no prefix: an empty prefix means the
-    show is hosted at the bucket root, and a recursive delete there would
-    destroy the whole bucket instead of just this show's content.
+    Refuses by default when the show has no prefix: an empty prefix means the
+    show is hosted at the bucket root, and a recursive delete there destroys
+    the whole bucket instead of just this show's content. Pass
+    `allow_empty_prefix=True` once the caller has separately warned about and
+    confirmed that risk with the user.
     """
-    if not show.get("prefix"):
+    if not show.get("prefix") and not allow_empty_prefix:
         raise ValueError(
             "Refusing to delete S3 objects: this show has no prefix, so a "
             "recursive delete would target the entire bucket. Clean up the "
-            "bucket manually.")
+            "bucket manually, or confirm deleting the whole bucket.")
     check_s3_access(show)
     process = _list_destination(show)
     if process.returncode != 0:

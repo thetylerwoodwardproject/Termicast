@@ -602,7 +602,21 @@ def _delete_show(db, show):
     from .s3deploy import delete_prefix
 
     uses_s3 = bool(show.get("bucket")) and (show.get("hosting") == "s3" or show.get("mirror_feed"))
-    s3_count = delete_prefix(show, dry_run=True) if uses_s3 else None
+    allow_bucket_root = False
+    if uses_s3 and not show.get("prefix"):
+        console.print(
+            f"'{show['title']}' has no S3 prefix, so its objects live at the root of "
+            f"bucket '{show['bucket']}'. Deleting them means deleting EVERYTHING in "
+            "that bucket, not just this show's files.", style=ACCENT)
+        if not confirm(f"Continue and delete the entire contents of bucket '{show['bucket']}'?"):
+            console.print("Cancelled. Nothing was changed.")
+            return
+        if text(f"Type the bucket name to confirm ({show['bucket']})", required=True) != show["bucket"]:
+            console.print("Cancelled. Nothing was changed.")
+            return
+        allow_bucket_root = True
+
+    s3_count = delete_prefix(show, dry_run=True, allow_empty_prefix=allow_bucket_root) if uses_s3 else None
     local_paths = local_delete_targets(show)
 
     console.print(f"This will permanently delete '{show['title']}' ({show['id']}):", style=ACCENT)
@@ -612,7 +626,8 @@ def _delete_show(db, show):
     else:
         console.print("  (no local files found)")
     if s3_count is not None:
-        location = f"s3://{show['bucket']}/{show.get('prefix', '')}"
+        location = (f"s3://{show['bucket']} (entire bucket)" if allow_bucket_root
+                    else f"s3://{show['bucket']}/{show.get('prefix', '')}")
         console.print(f"  {s3_count} object(s) under {location}", markup=False)
     console.print("This cannot be undone.", style=ACCENT)
 
@@ -624,7 +639,7 @@ def _delete_show(db, show):
         return
 
     if uses_s3:
-        delete_prefix(show, dry_run=False)
+        delete_prefix(show, dry_run=False, allow_empty_prefix=allow_bucket_root)
     delete_local_assets(show)
     db.forget_show(show["id"])
     console.print("Podcast deleted.", style=ACCENT)

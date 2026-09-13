@@ -131,7 +131,7 @@ When you run `termicast`, you see:
 | **5. Delete podcast** | Permanently delete a show: local media/feed files, any S3 objects under its bucket/prefix, and the show itself. Cannot be undone. |
 | **6. Quit** | Exit |
 
-**Delete podcast** is the destructive option: it removes everything **Forget podcast** leaves behind. It shows you exactly what will be deleted (local paths, and an S3 object count if the show is S3-hosted or mirrors its feed there), then requires you to type the show's ID before it proceeds. If it can't verify something up front — for example, missing or invalid S3 credentials — it stops without deleting anything.
+**Delete podcast** is the destructive option: it removes everything **Forget podcast** leaves behind. It shows you exactly what will be deleted (local paths, and an S3 object count if the show is S3-hosted or mirrors its feed there), then requires you to type the show's ID before it proceeds. If it can't verify something up front — for example, missing or invalid S3 credentials — it stops without deleting anything. If the show has no S3 prefix (its files live at the bucket root), it warns you that deleting means deleting the *entire bucket*, and only proceeds if you separately confirm that and type the bucket's name back.
 
 ---
 
