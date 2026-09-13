@@ -12,7 +12,8 @@ import json
 import os
 from pathlib import Path
 
-from .models import ASSET_ROLES, chapters_relative, slug_error, transcript_relative
+from .models import (ASSET_ROLES, chapter_image_relative, chapters_relative,
+                     slug_error, transcript_relative)
 from .publisher import fsync_dir, operation_lock, output_lock
 from .storage import asset_base, asset_root, local_relative
 from .validation import validate_episode
@@ -67,6 +68,10 @@ def plan_rename(show, episode, new_slug, others=()):
             relative = other.get(path_field) or local_relative(show, other.get(field))
             if relative:
                 shared.add(str(relative))
+        for chapter in other.get("chapters") or []:
+            relative = local_relative(show, chapter.get("img"))
+            if relative:
+                shared.add(str(relative))
 
     for field, path_field in ASSET_ROLES:
         url = episode.get(field)
@@ -107,6 +112,57 @@ def plan_rename(show, episode, new_slug, others=()):
             for key, value in (show.get("import_url_map") or {}).items():
                 if value == url:
                     plan.map_updates[key] = new_url
+
+    # Chapter images carry no stored path either, only the public `img` URL
+    # shipped inside chapters.json. Recover each unique URL, rename it to
+    # follow the slug, and leave shared images untouched.
+    img_indices = {}
+    for index, chapter in enumerate(episode.get("chapters") or [], 1):
+        img = chapter.get("img")
+        if img and img not in img_indices:
+            img_indices[img] = index
+    new_chapters = [dict(chapter) for chapter in episode.get("chapters") or []]
+    img_updates = {}
+    for img, index in img_indices.items():
+        relative = local_relative(show, img)
+        if not relative:
+            continue
+        relative = str(relative)
+        if not _safe_relative(assets, relative):
+            plan.warnings.append(f"Left alone, outside the managed folders: {relative}")
+            continue
+        if relative in shared:
+            plan.warnings.append(f"Left alone, shared with another episode: {relative}")
+            continue
+        source = assets / relative
+        new_relative = chapter_image_relative(new_slug, index, source.suffix)
+        if new_relative == relative:
+            continue
+        target = assets / new_relative
+        if not source.is_file():
+            if show.get("hosting") == "s3":
+                # No local copy (S3 without "keep a local copy of media"): the
+                # object is renamed directly in S3 instead of moving a local file.
+                plan.remote_moves.append((relative, new_relative))
+            else:
+                plan.missing.append(relative)
+                continue
+        elif target.exists():
+            plan.blocked.append(new_relative)
+            continue
+        else:
+            plan.moves.append((relative, new_relative))
+        new_url = asset_base(show) + "/" + new_relative
+        img_updates[img] = new_url
+        plan.url_changes.append((img, new_url))
+        for key, value in (show.get("import_url_map") or {}).items():
+            if value == img:
+                plan.map_updates[key] = new_url
+    if img_updates:
+        for chapter in new_chapters:
+            if chapter.get("img") in img_updates:
+                chapter["img"] = img_updates[chapter["img"]]
+        plan.fields["chapters"] = new_chapters
 
     # Chapter JSON and the managed transcript carry no stored path: they are
     # recomputed from the slug, so the new files appear on the next write and

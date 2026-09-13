@@ -235,15 +235,24 @@ def _shared_asset_urls(episodes):
 
     Feeds routinely reuse one artwork URL for every item, and `asset` stages
     such a URL exactly once. Renaming that single file per episode would leave
-    every episode but the last pointing at a name it does not own.
+    every episode but the last pointing at a name it does not own. Chapter
+    images are counted the same way, keyed by the episode so a URL reused by
+    several chapters of one episode is still renamed once.
     """
-    counts = {}
+    owners = {}
     for episode in episodes:
+        urls = set()
         for field, _ in ASSET_ROLES:
             url = episode.get(field)
             if url:
-                counts[url] = counts.get(url, 0) + 1
-    return {url for url, count in counts.items() if count > 1}
+                urls.add(url)
+        for chapter in episode.get("chapters") or []:
+            url = chapter.get("img")
+            if url:
+                urls.add(url)
+        for url in urls:
+            owners.setdefault(url, set()).add(episode.get("guid"))
+    return {url for url, guids in owners.items() if len(guids) > 1}
 
 
 def _check_name_destinations(assets, slugs):
@@ -428,17 +437,18 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                     if url is None:
                         return [] if folder == "chapters" else ""
 
-        def rename_staged(url, slug):
+        def rename_staged(url, slug, stem=None):
             """Rename the staged file for `url` to `slug`, keeping its folder.
 
             Renaming in place preserves both the folder (imported episode art
             lives under images/episodes) and the suffix, which follows the
-            source rather than the episode.
+            source rather than the episode. `stem` overrides the filename for
+            callers that need an indexed name (chapter images).
             """
             if not slug or not url or url not in local_paths or url in shared:
                 return None
             path = local_paths[url]
-            target = path.with_name(slug + path.suffix)
+            target = path.with_name((stem or slug) + path.suffix)
             if target == path:
                 return path.relative_to(stage).as_posix()
             if target.exists():
@@ -470,6 +480,21 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 if relative:
                     episode[field] = mapping[source]
                     episode[path_field] = relative
+            img_renames = {}
+            for index, chapter in enumerate(episode.get("chapters") or [], 1):
+                img = chapter.get("img")
+                if not img or img in img_renames:
+                    continue
+                source = source_for(img)
+                if source is None:
+                    continue
+                relative = rename_staged(source, slug, stem=f"{slug}-{index:02d}")
+                if relative:
+                    img_renames[img] = mapping[source]
+            if img_renames:
+                for chapter in episode.get("chapters") or []:
+                    if chapter.get("img") in img_renames:
+                        chapter["img"] = img_renames[chapter["img"]]
 
         channel = root.find("channel")
         for element in channel.findall(_tag("itunes:image")):

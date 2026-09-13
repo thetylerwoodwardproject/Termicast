@@ -255,6 +255,66 @@ def test_chapters_follow_the_slug_and_the_old_file_is_an_orphan(db, show):
     assert not (assets / "chapters" / "old.json").exists()
 
 
+def test_rename_moves_chapter_images_to_slugged_names(db, show):
+    """Chapter images follow the episode's slug, indexed by chapter position."""
+    assets = asset_root(show)
+    (assets / "audio").mkdir(parents=True, exist_ok=True)
+    (assets / "images" / "chapters").mkdir(parents=True, exist_ok=True)
+    (assets / "audio" / "old.mp3").write_bytes(b"audio")
+    (assets / "images" / "chapters" / "abc.jpg").write_bytes(b"image")
+    (assets / "images" / "chapters" / "def.jpg").write_bytes(b"image2")
+    record = new_episode(
+        guid="ep-1", title="With chapter art", description="d", slug="old",
+        mp3_url=f"{BASE}/audio/old.mp3", length=5, duration=60.0,
+        audio_path="audio/old.mp3",
+        chapters=[
+            {"startTime": 0.0, "endTime": 30.0, "title": "First",
+             "img": f"{BASE}/images/chapters/abc.jpg"},
+            {"startTime": 30.0, "endTime": 60.0, "title": "Second",
+             "img": f"{BASE}/images/chapters/def.jpg"},
+        ],
+    )
+    Publisher(db).publish(show["id"], record)
+    stored = db.list_episodes(show["id"])[0]
+
+    plan = plan_rename(show, stored, "ep001")
+    assert ("images/chapters/abc.jpg", "images/chapters/ep001-01.jpg") in plan.moves
+    assert ("images/chapters/def.jpg", "images/chapters/ep001-02.jpg") in plan.moves
+
+    _, renamed = rename_episode(db, show, stored, plan)
+    assert (assets / "images" / "chapters" / "ep001-01.jpg").is_file()
+    assert (assets / "images" / "chapters" / "ep001-02.jpg").is_file()
+    assert not (assets / "images" / "chapters" / "abc.jpg").exists()
+    assert renamed["chapters"][0]["img"] == f"{BASE}/images/chapters/ep001-01.jpg"
+    assert renamed["chapters"][1]["img"] == f"{BASE}/images/chapters/ep001-02.jpg"
+
+
+def test_rename_leaves_shared_chapter_images_alone(db, show):
+    """A chapter image another episode references keeps its name."""
+    assets = asset_root(show)
+    (assets / "audio").mkdir(parents=True, exist_ok=True)
+    (assets / "images" / "chapters").mkdir(parents=True, exist_ok=True)
+    (assets / "audio" / "old.mp3").write_bytes(b"audio")
+    (assets / "images" / "chapters" / "shared.jpg").write_bytes(b"image")
+    record = new_episode(
+        guid="ep-1", title="A", description="d", slug="old",
+        mp3_url=f"{BASE}/audio/old.mp3", length=5, duration=60.0,
+        audio_path="audio/old.mp3",
+        chapters=[{"startTime": 0.0, "endTime": 60.0, "title": "S",
+                   "img": f"{BASE}/images/chapters/shared.jpg"}],
+    )
+    Publisher(db).publish(show["id"], record)
+    stored = db.list_episodes(show["id"])[0]
+    other = new_episode(
+        guid="ep-2", title="B", description="d",
+        chapters=[{"startTime": 0.0, "endTime": 60.0, "title": "S2",
+                   "img": f"{BASE}/images/chapters/shared.jpg"}],
+    )
+    plan = plan_rename(show, stored, "ep001", others=[other])
+    assert not any(old == "images/chapters/shared.jpg" for old, _ in plan.moves)
+    assert any("shared" in message for message in plan.warnings)
+
+
 def test_renamed_imported_audio_becomes_deployable(db, show, episode):
     """Setting audio_path is what makes imported media visible to deploy."""
     from termicast.publisher import episode_asset_paths

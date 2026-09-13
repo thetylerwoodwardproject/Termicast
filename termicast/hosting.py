@@ -186,6 +186,10 @@ def check_assets(show, episodes) -> list[str]:
         if episode.get("chapters"):
             from .models import chapters_relative
             urls.append((base + "/" + chapters_relative(episode), "application/json+chapters"))
+            for chapter in episode["chapters"]:
+                img = chapter.get("img")
+                if img:
+                    urls.append((img, content_type_for(img) or "image/jpeg"))
         for url, expected in urls:
             if url in seen:
                 continue

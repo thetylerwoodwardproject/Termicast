@@ -174,6 +174,16 @@ def transcript_relative(episode) -> str:
     return "transcripts/" + chapter_filename(episode["guid"]) + TRANSCRIPT_EXT
 
 
+def chapter_image_relative(slug, index, suffix) -> str:
+    """Relative path for a chapter image following the episode's slug.
+
+    `index` is the chapter's one-based position in the episode, `suffix` the
+    original file suffix (including the dot). Kept under `images/chapters/` so
+    it stays inside the managed folders while sharing the episode's slug.
+    """
+    return f"images/chapters/{slug}-{int(index):02d}{suffix}"
+
+
 def new_show(**kwargs) -> dict:
     """Create a show; later base_url changes must not regenerate its GUID."""
     show = dict.fromkeys((

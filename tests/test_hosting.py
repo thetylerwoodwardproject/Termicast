@@ -78,6 +78,21 @@ def test_check_assets_flags_unreachable_show_artwork(monkeypatch):
     assert any("images/cover.jpg" in p for p in problems)
 
 
+def test_check_assets_flags_unreachable_chapter_image(monkeypatch):
+    """Each chapter's image must be verified, not just the chapters.json file."""
+    show = new_show(base_url="https://e.org/show")
+    episode = {
+        "status": "published", "guid": "ep-1",
+        "mp3_url": "https://e.org/show/audio/e.mp3",
+        "artwork_url": "https://e.org/show/images/e.jpg",
+        "chapters": [{"startTime": 0, "endTime": 60, "title": "S",
+                      "img": "https://e.org/show/images/chapters/c1.jpg"}],
+    }
+    monkeypatch.setattr(hosting, "check_url", lambda url, expected=None: [f"Unreachable: {url}"])
+    problems = hosting.check_assets(show, [episode])
+    assert any("images/chapters/c1.jpg" in p for p in problems)
+
+
 def test_doctor_aggregates_and_unknown_show():
     db = Mock()
     db.get_show.return_value = None

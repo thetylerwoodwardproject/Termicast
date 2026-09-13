@@ -177,3 +177,66 @@ def test_auto_mode_also_approves_resizing(tmp_path, monkeypatch):
     assert len(prompts) == 1
     with Image.open(path) as image:
         assert (image.mode, image.format, image.size) == ("RGB", "JPEG", (3000, 3000))
+
+
+def test_shared_asset_urls_counts_chapter_images_across_episodes():
+    """A chapter image reused by several chapters of one episode is still renamed."""
+    from termicast.importer import _shared_asset_urls
+    episodes = [
+        {"guid": "a", "mp3_url": "https://x.example/a.mp3",
+         "chapters": [{"img": "https://x.example/c1.jpg"}]},
+        {"guid": "b", "mp3_url": "https://x.example/b.mp3",
+         "chapters": [{"img": "https://x.example/c1.jpg"},
+                      {"img": "https://x.example/c2.jpg"}]},
+    ]
+    shared = _shared_asset_urls(episodes)
+    assert "https://x.example/c1.jpg" in shared
+    assert "https://x.example/c2.jpg" not in shared
+    assert "https://x.example/a.mp3" not in shared
+
+
+def test_import_naming_renames_chapter_images(tmp_path):
+    """Chapter images follow the episode slug when a naming scheme is applied."""
+    from termicast.importer import download_import
+
+    feed = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"'
+        ' xmlns:psc="http://podlove.org/simple-chapters">'
+        '<channel><title>S</title><description>d</description><link>https://old.example.org</link>'
+        '<item><title>Ep</title><guid isPermaLink="false">ep-1</guid><description>d</description>'
+        '<enclosure url="https://old.example.org/audio/ep1.mp3" length="1234" type="audio/mpeg"/>'
+        '<pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>'
+        '<itunes:duration>60</itunes:duration>'
+        '<psc:chapters version="1.2">'
+        '<psc:chapter start="00:00:00.000" title="First" image="https://old.example.org/images/c1.jpg"/>'
+        '<psc:chapter start="00:00:30.000" title="Second" image="https://old.example.org/images/c2.jpg"/>'
+        '</psc:chapters>'
+        '</item></channel></rss>'
+    ).encode()
+
+    src = tmp_path / "src"
+    src.mkdir()
+    audio = src / "ep1.mp3"
+    audio.write_bytes(b"fake-audio")
+    c1 = src / "c1.jpg"
+    c2 = src / "c2.jpg"
+    Image.new("RGB", (100, 100)).save(c1, "JPEG")
+    Image.new("RGB", (120, 120)).save(c2, "JPEG")
+    preseed = {
+        "https://old.example.org/audio/ep1.mp3": (str(audio), "audio/ep1.mp3"),
+        "https://old.example.org/images/c1.jpg": (str(c1), "images/chapters/c1.jpg"),
+        "https://old.example.org/images/c2.jpg": (str(c2), "images/chapters/c2.jpg"),
+    }
+
+    show = new_show(title="S", description="d", base_url="https://new.example.org/show",
+                    output_dir=str(tmp_path / "out"))
+    show, episodes = download_import(show, feed, preseed=preseed,
+                                     require_preseed=True, naming="ep")
+
+    episode = episodes[0]
+    assert episode["slug"] == "ep001"
+    assert episode["chapters"][0]["img"] == "https://new.example.org/show/images/chapters/ep001-01.jpg"
+    assert episode["chapters"][1]["img"] == "https://new.example.org/show/images/chapters/ep001-02.jpg"
+    assert (tmp_path / "out" / "images" / "chapters" / "ep001-01.jpg").is_file()
+    assert (tmp_path / "out" / "images" / "chapters" / "ep001-02.jpg").is_file()

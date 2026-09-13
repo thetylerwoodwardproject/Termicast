@@ -155,6 +155,17 @@ Extensions follow the actual output format. Slugs use ASCII letters, numbers,
 hyphens, and underscores, and must begin with a letter or number. Collisions
 with other episodes are rejected before install.
 
+Per-chapter images follow the same scheme, indexed by their chapter's position
+in the episode:
+
+```text
+images/chapters/s02ep042-01.jpg
+images/chapters/s02ep042-02.jpg
+```
+
+A chapter image shared by another episode keeps its original name so both
+episodes continue to point at the same file.
+
 ## ⏰ Scheduling and cron
 
 > [!WARNING]
