@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import stat
 import sqlite3
 import tempfile
 from uuid import uuid4
@@ -86,22 +87,33 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                                             raise ValueError(f"Refusing symbolic-link media: {path}")
                                     dirs[:] = [name for name in dirs if not name.startswith(".")]
                                     files.extend(Path(directory) / name for name in names if not name.startswith("."))
+                        # `files` already holds every media file when
+                        # include_media is set, so the membership test below
+                        # ran over thousands of entries per episode; keep a
+                        # parallel set and use the list only for order.
+                        seen = set(files)
                         for episode in db.list_episodes(show["id"]):
+                            expected = []
                             if episode["status"] == "published" and episode.get("chapters"):
-                                expected = assets / chapters_relative(episode)
-                                if expected not in files:
-                                    files.append(expected)
+                                expected.append(assets / chapters_relative(episode))
                             if episode.get("_transcript_vtt"):
-                                expected = assets / transcript_relative(episode)
-                                if expected not in files:
-                                    files.append(expected)
+                                expected.append(assets / transcript_relative(episode))
+                            for path in expected:
+                                if path not in seen:
+                                    seen.add(path)
+                                    files.append(path)
                         for path in files:
-                            if path.is_symlink():
-                                raise ValueError(f"Refusing symbolic-link output file: {path}")
-                            if not path.exists():
+                            # One lstat answers all three questions; is_symlink
+                            # /exists/is_file were three separate stat calls on
+                            # every archived file.
+                            try:
+                                info = os.lstat(path)
+                            except OSError:
                                 manifest["missing_files"].append(str(path))
                                 continue
-                            if not path.is_file():
+                            if stat.S_ISLNK(info.st_mode):
+                                raise ValueError(f"Refusing symbolic-link output file: {path}")
+                            if not stat.S_ISREG(info.st_mode):
                                 raise ValueError(f"Expected a regular output file: {path}")
                             relative = "feed.xml" if path == output / "feed.xml" else path.relative_to(assets).as_posix()
                             archive.write(path, f"{prefix}/{relative}")

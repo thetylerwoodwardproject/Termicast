@@ -62,13 +62,18 @@ def import_csv(db, show_id, path):
 
     def preflight(existing, show):
         prepared = []
+        # Rows without a GUID are matched on mp3_url. Scanning `existing` per
+        # row made that O(rows x episodes); index it once instead.
+        by_mp3 = {}
+        for episode in existing.values():
+            by_mp3.setdefault(episode["mp3_url"], []).append(episode)
         for number, row in enumerate(rows, 2):
             try:
                 if None in row or any(value is None for value in row.values()):
                     raise ValueError("Wrong number of CSV columns")
                 guid = row.get("guid", "")
                 if not guid:
-                    matches = [e for e in existing.values() if e["mp3_url"] == row.get("mp3_url", "")]
+                    matches = by_mp3.get(row.get("mp3_url", ""), [])
                     if len(matches) > 1:
                         raise ValueError("Ambiguous MP3 URL; supply an explicit GUID")
                     guid = matches[0]["guid"] if matches else str(uuid4())
