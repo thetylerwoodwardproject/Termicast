@@ -79,18 +79,26 @@ def test_enclosure_types():
 
 
 @pytest.mark.skipif(not FFMPEG, reason="ffmpeg/ffprobe not installed")
-def test_prepare_media_end_to_end(tmp_path):
+@pytest.mark.parametrize("suffix,keep_image,expected_suffix", [
+    (".png", False, ".jpg"), (".jpg", False, ".jpg"),
+    (".png", True, ".png"), (".jpg", True, ".jpg"),
+])
+def test_prepare_media_end_to_end(tmp_path, suffix, keep_image, expected_suffix):
     show = new_show(base_url="https://e.org/show", output_dir=str(tmp_path / "out"))
     wav = make_wav(tmp_path / "tone.wav")
-    png = make_png(tmp_path / "art.png")
+    image = (make_png if suffix == ".png" else make_jpg)(tmp_path / ("art" + suffix))
     vtt = make_vtt(tmp_path / "sub.vtt")
-    prepared = prepare_media(show, identify_files([str(wav), str(png), str(vtt)]),
-                             slug="s01e001")
+    prepared = prepare_media(show, identify_files([str(wav), str(image), str(vtt)]),
+                             slug="s01e001", keep_image=keep_image)
     assert prepared.audio_relative == "audio/s01e001.mp3"
     assert prepared.audio_meta["codec"] == "mp3"
     assert prepared.audio_meta["sample_rate"] == 44100
     assert prepared.audio_meta["duration"] > 0
-    assert prepared.image_relative == "images/s01e001.jpg"
+    assert prepared.image_relative == "images/episodes/s01e001" + expected_suffix
+    assert prepared.image_path == tmp_path / "out" / prepared.image_relative
+    assert not (tmp_path / "out/images" / ("s01e001" + expected_suffix)).exists()
+    if keep_image or suffix == ".jpg":
+        assert prepared.image_path.read_bytes() == image.read_bytes()
     assert prepared.transcript_relative == "transcripts/s01e001.vtt"
     for relative in (prepared.audio_relative, prepared.image_relative, prepared.transcript_relative):
         assert (tmp_path / "out" / relative).is_file()

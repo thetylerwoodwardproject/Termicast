@@ -607,7 +607,8 @@ def _artwork(current, episode, show=None, data=None):
                 and current != asset_url(show, f"images/{stem}.jpg"))):
             index += 1
             stem = f"cover-{index}"
-    return _artwork_prompt(current, show=show, stem=stem, kind="episode" if episode else "show")
+    return _artwork_prompt(current, show=show, stem=stem, kind="episode" if episode else "show",
+                           folder="images/episodes" if episode else "images")
 
 
 def _podroll(current):

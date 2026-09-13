@@ -152,8 +152,9 @@ reduced to 3000x3000. Per-episode overrides: `--audio-preset`, `--image-preset`,
 
 Artwork settings accept a local JPEG/PNG/WebP path or an HTTPS URL. If remote
 artwork needs conversion, Termicast offers to download it, convert it to RGB JPEG,
-and host it in the show's `images/` folder. Show and episode artwork installed
-through settings is padded/enlarged to 3000×3000. WebP cannot use `--keep-image`.
+and host it under `images/` for show artwork or `images/episodes/` for episode
+artwork. Show and episode artwork installed through settings is padded/enlarged
+to 3000×3000. WebP cannot use `--keep-image`.
 
 ### Chapters
 

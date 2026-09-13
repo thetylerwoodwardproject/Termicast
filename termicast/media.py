@@ -479,7 +479,7 @@ def prepare_media(show, files, *, slug, audio_preset=None, image_preset=None,
 
     root = asset_root(show)
     audio_dir = root / "audio"
-    image_dir = root / "images"
+    image_dir = root / "images" / "episodes"
     transcript_dir = root / "transcripts"
     for directory in (audio_dir, image_dir, transcript_dir):
         directory.mkdir(parents=True, exist_ok=True)
@@ -493,6 +493,7 @@ def prepare_media(show, files, *, slug, audio_preset=None, image_preset=None,
             prepared.image_path, prepared.image_relative, prepared.image_before, prepared.image_after, \
                 prepared.image_dims, prepared.image_note = _prepare_image(
                     files["image"], image_dir, slug, image_preset, keep_image, update)
+            prepared.image_relative = prepared.image_path.relative_to(root).as_posix()
         if files.get("transcript"):
             prepared.transcript_path, prepared.transcript_relative, _, _ = _prepare_transcript(
                 files["transcript"], transcript_dir, slug, update)

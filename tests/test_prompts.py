@@ -258,30 +258,52 @@ def test_chapter_image_index_claims_ignore_suffix_and_allow_own_index(tmp_path, 
     assert entry["img"] == old["img"]
 
 
-def test_episode_artwork_updates_managed_path(tmp_path, monkeypatch):
+@pytest.mark.parametrize("slug", ["ep042", ""])
+@pytest.mark.parametrize("remote", [False, True])
+def test_episode_artwork_updates_managed_path(tmp_path, monkeypatch, slug, remote):
     from PIL import Image
+    from termicast import validation
     from termicast.models import new_episode, new_show, chapter_filename
     show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show")
-    episode = new_episode(guid="external/id", artwork_url="https://e.org/show/images/old.png",
+    episode = new_episode(guid="external/id", slug=slug, artwork_url="https://e.org/show/images/old.png",
                           image_path="images/old.png")
     source = tmp_path / "cover.webp"
     Image.new("RGB", (50, 50)).save(source)
-    monkeypatch.setattr(prompts, "text", lambda *a, **k: str(source))
+    monkeypatch.setattr(validation, "_download", lambda url, handle, limit: handle.write(source.read_bytes()))
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: "https://source.e.org/cover.webp" if remote else str(source))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: True)
     prompts.edit_field(episode, "artwork_url", episode=True, show=show)
-    relative = "images/" + chapter_filename(episode["guid"]).removesuffix(".json") + ".jpg"
+    stem = slug or chapter_filename(episode["guid"]).removesuffix(".json")
+    relative = f"images/episodes/{stem}.jpg"
     assert episode["artwork_url"] == "https://e.org/show/" + relative
     assert episode["image_path"] == relative
+    assert (tmp_path / "out" / relative).is_file()
+    assert not (tmp_path / "out/images" / (stem + ".jpg")).exists()
 
 
 @pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="FFmpeg required")
-def test_add_webp_episode_and_manual_chapters_through_publication(db, show, tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("hosting", ["local", "s3"])
+def test_add_webp_episode_and_manual_chapters_through_publication(db, show, tmp_path, monkeypatch, capsys, hosting):
     import json
+    import subprocess
     from pathlib import Path
     from PIL import Image
     from conftest import make_wav
-    from termicast.feed import validate_feed
+    from termicast import s3deploy
+    from termicast.feed import NS, validate_feed
     from termicast.publisher import Publisher, episode_asset_paths
+    from termicast.storage import asset_url
     from termicast.validation import inspect_local_artwork, validate_episode
+    from lxml import etree
+    if hosting == "s3":
+        show.update(hosting="s3", enabled=True, bucket="my-bucket", prefix="twp",
+                    asset_base_url="https://cdn.example.org/twp", keep_local_media=True)
+        show = db.save_show(show)
+        monkeypatch.setattr(s3deploy, "check_s3_access", lambda show: None)
+        monkeypatch.setattr("termicast.hosting.check_url", lambda *a, **k: [])
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "_run", run)
+    monkeypatch.setattr(s3deploy, "s4cmd_path", lambda: "s4cmd")
     audio = make_wav(tmp_path / "episode.wav", seconds=2)
     cover = tmp_path / "cover.webp"
     Image.new("RGB", (3000, 3000)).save(cover)
@@ -303,9 +325,21 @@ def test_add_webp_episode_and_manual_chapters_through_publication(db, show, tmp_
     assert saved["chapters"][0]["img"].endswith("/images/chapters/ep001-01.jpg")
     assert "images/chapters/ep001-01.jpg" in episode_asset_paths(saved, show)
     root = Path(show["output_dir"])
-    assert inspect_local_artwork(root / "images/ep001.jpg", episode=True) == []
+    relative = "images/episodes/ep001.jpg"
+    assert saved["image_path"] == relative
+    assert saved["artwork_url"] == asset_url(show, relative)
+    assert relative in episode_asset_paths(saved, show)
+    assert inspect_local_artwork(root / relative, episode=True) == []
+    assert not (root / "images/ep001.jpg").exists()
     assert json.loads((root / "chapters/ep001.json").read_text())["chapters"] == saved["chapters"]
     assert validate_feed((root / "feed.xml").read_bytes()) == []
+    feed = etree.fromstring((root / "feed.xml").read_bytes())
+    assert feed.find("channel/item/itunes:image", NS).get("href") == saved["artwork_url"]
+    if hosting == "s3":
+        targets = [call.args[0][-1] for call in run.call_args_list]
+        assert "s3://my-bucket/twp/images/episodes/ep001.jpg" in targets
+        assert "s3://my-bucket/twp/images/chapters/ep001-01.jpg" in targets
+        assert "s3://my-bucket/twp/images/ep001.jpg" not in targets
     assert not any("Stop" in label for label in labels)
     assert "WEBP to JPEG" in capsys.readouterr().out
 

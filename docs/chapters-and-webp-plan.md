@@ -191,7 +191,7 @@ Installed names:
 | Artwork | Path |
 |---|---|
 | Show | `images/cover.jpg`, falling back to `cover-2.jpg`… if an episode already owns that name |
-| Episode | `images/<slug>.jpg` — the name `prepare_media` already uses; no slug → the `chapter_filename(guid)` stem |
+| Episode | `images/episodes/<slug>.jpg`; no slug → the `chapter_filename(guid)` stem |
 | Chapter | `images/chapters/<stem>-NN.jpg` via `models.chapter_image_relative` |
 
 No deploy work is needed: `publisher.py:257` and `:352` already fold
@@ -261,7 +261,7 @@ New/updated tests:
 
 End-to-end, in the TUI (`.venv/bin/termicast`):
 
-1. `termicast add ep.mp3 cover.webp` → `images/<slug>.jpg`, review shows the
+1. `termicast add ep.mp3 cover.webp` → `images/episodes/<slug>.jpg`, review shows the
    conversion note.
 2. Episode review → **Add chapters / transcript** → **Chapters manually**: add three
    chapters *out of order*, entering only starts; confirm the list re-sorts and shows
