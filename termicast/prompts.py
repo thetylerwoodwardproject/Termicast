@@ -411,6 +411,47 @@ def text(label, default="", required=False, *, example=None):
         error("This field is required.")
 
 
+def ask(label, default="", *, parse=None, required=False, example=None,
+        catching=(ValueError, KeyError)):
+    """Prompt until `parse` accepts the value, keeping what was typed on retry.
+
+    Several open-coded copies of this loop re-offered the *original* default
+    after a rejection, so fixing a mistyped timezone or a slightly-too-long
+    description meant retyping the whole thing. Only the artwork prompt got
+    this right; now every caller does.
+    """
+    while True:
+        value = text(label, default, required=required, example=example)
+        try:
+            return value if parse is None else parse(value)
+        except catching as exc:
+            error(exc)
+            default = value
+
+
+def _parse_timezone(value):
+    try:
+        ZoneInfo(value)
+    except (KeyError, ValueError):
+        raise ValueError("Unknown IANA timezone.") from None
+    return value
+
+
+def _parse_keywords(value):
+    values = [keyword.strip() for keyword in value.split(",") if keyword.strip()]
+    if len(values) > 10:
+        raise ValueError("At most ten keywords are allowed.")
+    return values
+
+
+def _length_limited(limit):
+    def parse(value):
+        if limit and len(value) > limit:
+            raise ValueError(f"Maximum length is {limit} raw characters, including HTML and URLs.")
+        return value
+    return parse
+
+
 def secret(label):
     """Read one masked line (asterisks); never echoed, never given a default.
 
@@ -596,14 +637,8 @@ def edit_field(data, field, episode=False):
         if field == "category" and data.get("subcategory") not in CATEGORIES.get(data[field], []):
             data["subcategory"] = ""
     elif field == "timezone":
-        while True:
-            value = text("IANA timezone (e.g. America/New_York)", current or "UTC", True)
-            try:
-                ZoneInfo(value)
-                data[field] = value
-                break
-            except (KeyError, ValueError):
-                error("Unknown IANA timezone.")
+        data[field] = ask("IANA timezone (e.g. America/New_York)", current or "UTC",
+                          required=True, parse=_parse_timezone)
     elif field == "artwork_url":
         data[field] = _artwork(current, episode)
     elif field == "podroll":
@@ -615,23 +650,14 @@ def edit_field(data, field, episode=False):
                              integer=field != "duration",
                              optional=field.endswith("_number"), positive=True)
     elif field == "keywords":
-        while True:
-            raw = text("Keywords (comma separated, maximum ten)", ", ".join(current or []))
-            values = [value.strip() for value in raw.split(",") if value.strip()]
-            if len(values) <= 10:
-                data[field] = values
-                break
-            error("At most ten keywords are allowed.")
+        data[field] = ask("Keywords (comma separated, maximum ten)",
+                          ", ".join(current or []), parse=_parse_keywords)
     else:
         limit = {"description": 4000}.get(field) if episode else None
-        while True:
-            value = text(label + (f" (maximum {limit} raw characters)" if limit else ""),
-                         current, required=field in ("title", "description", "mp3_url",
-                                                     "output_dir", "base_url"))
-            if not limit or len(value) <= limit:
-                data[field] = value
-                break
-            error(f"Maximum length is {limit} raw characters, including HTML and URLs.")
+        data[field] = ask(label + (f" (maximum {limit} raw characters)" if limit else ""),
+                          current, parse=_length_limited(limit),
+                          required=field in ("title", "description", "mp3_url",
+                                             "output_dir", "base_url"))
         if field == "mp3_url":
             if current != data[field]:
                 data["length"] = None
