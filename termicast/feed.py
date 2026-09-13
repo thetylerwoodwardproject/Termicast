@@ -10,7 +10,7 @@ from uuid import UUID
 
 from lxml import etree
 from .models import chapters_relative
-from .media import ENCLOSURE_TYPES
+from .media import ENCLOSURE_TYPES, transcript_type
 from .storage import asset_base, asset_url
 
 
@@ -265,7 +265,8 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
         if episode.get("artwork_url"):
             _put(item, "itunes:image", href=episode["artwork_url"])
         if episode.get("transcript_url"):
-            _put(item, "podcast:transcript", url=episode["transcript_url"], type="text/vtt")
+            _put(item, "podcast:transcript", url=episode["transcript_url"],
+                 type=transcript_type(episode["transcript_url"]))
         if episode.get("keywords"):
             _put(item, "itunes:keywords", ",".join(episode["keywords"]))
         for soundbite in episode.get("soundbites", []):

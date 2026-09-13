@@ -242,7 +242,7 @@ def validate_episode(episode) -> list[str]:
         if not isinstance(entries, list):
             errors.append(f"{field} must be a list")
             continue
-        previous_start = previous_end = -1
+        previous_start = -1
         for index, entry in enumerate(entries):
             prefix = f"{field}[{index}]"
             if not isinstance(entry, dict):
@@ -265,27 +265,42 @@ def validate_episode(episode) -> list[str]:
                 if "stop" in entry and (not _number(entry["stop"]) or not math.isclose(entry["stop"], end)):
                     errors.append(f"{prefix}.stop must equal startTime + duration")
             else:
-                end = entry.get("endTime")
                 for key in ("img", "url"):
                     if entry.get(key) and not validate_https(entry[key]):
                         errors.append(f"{prefix}.{key} must be an absolute HTTPS URL")
+                if start <= previous_start:
+                    errors.append(f"{prefix} must be sorted by startTime")
+                previous_start = start
+                if _number(media_duration, positive=True) and start > media_duration:
+                    errors.append(f"{prefix} must start within media duration")
+                if "endTime" not in entry:
+                    continue
+                end = entry["endTime"]
+                following = entries[index + 1] if index + 1 < len(entries) else None
+                if (isinstance(following, dict) and _number(following.get("startTime"))
+                        and _number(end) and end > following["startTime"]):
+                    errors.append(f"{prefix}.endTime must not exceed the next startTime")
             if not _number(end) or end <= start:
                 errors.append(f"{prefix} end must be finite and greater than start")
                 continue
-            if start < previous_start or (field == "chapters" and start < previous_end):
-                errors.append(f"{prefix} must be sorted" + (" and nonoverlapping" if field == "chapters" else ""))
+            if field == "soundbites" and start < previous_start:
+                errors.append(f"{prefix} must be sorted")
             if _number(media_duration, positive=True) and end > media_duration:
                 errors.append(f"{prefix} must end within media duration")
-            previous_start, previous_end = start, end
+            previous_start = start
     return errors
 
 
-def backfill_chapter_ends(chapters, duration):
-    """Give each chapter an endTime: the next chapter's start, else `duration`."""
+def chapter_ends(chapters, duration):
+    """Yield explicit ends, else the next start, else a known positive duration.
+
+    For display only: the final end is None when duration is unknown, and the
+    chapter records are never modified.
+    """
     for index, chapter in enumerate(chapters):
-        chapter.setdefault("endTime", chapters[index + 1]["startTime"]
-                           if index + 1 < len(chapters) else duration)
-    return chapters
+        yield chapter.get("endTime", chapters[index + 1]["startTime"]
+                          if index + 1 < len(chapters) else
+                          duration if _number(duration, positive=True) else None)
 
 
 def validate_chapter_payload(payload, episode):
@@ -297,8 +312,10 @@ def validate_chapter_payload(payload, episode):
         raise ValueError("Chapter JSON requires a nonempty chapters array")
     if any(not isinstance(chapter, dict) or "startTime" not in chapter for chapter in chapters):
         raise ValueError("Each chapter must be an object with startTime")
-    backfill_chapter_ends(chapters, episode.get("duration"))
-    errors = validate_episode(dict(episode, chapters=chapters))
+    # A chapter document can be checked before the rest of the episode (notably
+    # its duration) is known. Full record validation still happens before saving.
+    errors = [error for error in validate_episode(dict(episode, chapters=chapters))
+              if error.startswith("chapters")]
     if errors:
         raise ValueError("; ".join(errors))
     return chapters
@@ -419,7 +436,18 @@ def probe_media(url) -> dict:
     return result
 
 
-def inspect_artwork(url, episode=False) -> list[str]:
+class ArtworkNeedsConversion(ValueError):
+    """Readable artwork whose format, mode, or dimensions need normalization."""
+
+    def __init__(self, message, format, mode, size, required_size):
+        super().__init__(message)
+        self.format = format
+        self.mode = mode
+        self.size = size
+        self.required_size = required_size
+
+
+def inspect_artwork(url, episode=False, chapter=False) -> list[str]:
     """Inspect via Pillow; return warnings if unavailable, raise on bad dimensions."""
     if not validate_https(url):
         raise ValueError("Artwork URL must use HTTPS")
@@ -437,10 +465,15 @@ def inspect_artwork(url, episode=False) -> list[str]:
             image.verify()
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
         return [f"Artwork inspection unavailable: {exc}. Verify dimensions manually."]
+
+    def needs_conversion(message):
+        return ArtworkNeedsConversion(message, format_name, mode, (width, height),
+                                      None if chapter else (3000, 3000))
+
     if format_name not in ("JPEG", "PNG") or mode != "RGB":
-        raise ValueError("Artwork must be JPEG or PNG in RGB mode")
+        raise needs_conversion("Artwork must be JPEG or PNG in RGB mode")
     if episode and (width, height) != (3000, 3000):
-        raise ValueError("Episode artwork must be exactly 3000x3000 pixels")
-    if not episode and (width != height or not 1400 <= width <= 3000):
-        raise ValueError("Show artwork must be square, 1400 through 3000 pixels")
+        raise needs_conversion("Episode artwork must be exactly 3000x3000 pixels")
+    if not episode and not chapter and (width != height or not 1400 <= width <= 3000):
+        raise needs_conversion("Show artwork must be square, 1400 through 3000 pixels")
     return []

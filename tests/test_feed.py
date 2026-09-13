@@ -107,3 +107,21 @@ def test_op3_prefixes_rewritten_template_enclosure():
     data = render_feed(show, template, [episode], datetime.now(timezone.utc))
     enclosure = etree.fromstring(data).find("channel/item/enclosure")
     assert enclosure.get("url") == "https://op3.dev/e/https://new.example.org/audio/e1.mp3"
+
+
+def test_transcript_type_reflects_format():
+    """SubRip is a valid podcast:transcript format; the feed must not call it WebVTT."""
+    show = new_show(title="S", description="d", base_url="https://e.org/show", output_dir="/tmp/x")
+
+    def rendered(url):
+        episode = new_episode(
+            title="Ep", description="desc", guid="00000000-0000-0000-0000-000000000003",
+            mp3_url="https://e.org/show/audio/e1.mp3", length=1234, duration=60.0,
+            published_at="2024-01-01T00:00:00+00:00", transcript_url=url)
+        root = etree.fromstring(render(show, [episode]))
+        return root.find(f"channel/item/{_tag('podcast:transcript')}", NS)
+
+    assert rendered("https://e.org/show/transcripts/e1.vtt").get("type") == "text/vtt"
+    assert rendered("https://e.org/show/transcripts/e1.srt").get("type") == "application/x-subrip"
+    assert rendered("https://e.org/t.txt").get("type") == "text/plain"
+    assert rendered("https://e.org/transcript?id=7").get("type") == "text/vtt"

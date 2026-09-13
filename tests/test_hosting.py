@@ -277,3 +277,12 @@ def test_hosting_menu_exits_on_eof_instead_of_spinning(monkeypatch):
 
     with pytest.raises(EOFError):
         prompts.hosting_menu(Mock(), publisher, {"id": "001"})
+
+
+def test_asset_urls_expect_the_linked_transcript_type(show):
+    from termicast.hosting import asset_urls
+
+    episode = {"status": "published", "mp3_url": "https://example.org/show/audio/e1.mp3",
+               "transcript_url": "https://example.org/show/transcripts/e1.srt"}
+    expected = dict(asset_urls(show, [episode]))
+    assert expected["https://example.org/show/transcripts/e1.srt"] == "application/x-subrip"

@@ -204,7 +204,7 @@ def asset_urls(show, episodes, skip=()) -> list[tuple]:
     `skip` drops URLs the caller has already verified, so a deploy does not
     check what it just uploaded twice.
     """
-    from .media import content_type_for
+    from .media import content_type_for, transcript_type
     pairs = []
     seen = set(skip)
     base = asset_base(show)
@@ -220,7 +220,7 @@ def asset_urls(show, episodes, skip=()) -> list[tuple]:
         if episode.get("artwork_url"):
             urls.append((episode["artwork_url"], content_type_for(episode["artwork_url"]) or "image/jpeg"))
         if episode.get("transcript_url"):
-            urls.append((episode["transcript_url"], "text/vtt"))
+            urls.append((episode["transcript_url"], transcript_type(episode["transcript_url"])))
         if episode.get("chapters"):
             from .models import chapters_relative
             urls.append((base + "/" + chapters_relative(episode), "application/json+chapters"))

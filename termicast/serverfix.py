@@ -19,6 +19,7 @@ types {
     application/rss+xml       xml;
     application/json+chapters json;
     text/vtt                  vtt;
+    application/x-subrip      srt;
     audio/mp4                 m4a;
     audio/mpeg                mp3;
     image/jpeg                jpg jpeg;
@@ -32,6 +33,7 @@ APACHE_MIME_BLOCK = """\
 AddType application/rss+xml .xml
 AddType application/json+chapters .json
 AddType text/vtt .vtt
+AddType application/x-subrip .srt
 AddType audio/mp4 .m4a
 AddType audio/mpeg .mp3
 AddType image/jpeg .jpg .jpeg

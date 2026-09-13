@@ -20,7 +20,8 @@ termicast add <show-id> episode.mp3 artwork.jpg transcript.vtt --slug s02ep042
 ```
 
 Audio is required; artwork and transcript are optional and identified by their
-file type. Termicast prepares the files (audio presets, image optimization),
+file type. Transcripts may be WebVTT or SubRip (`.srt`); a managed SubRip file
+is converted to WebVTT. Termicast prepares the files (audio presets, image optimization),
 prompts for title and details, and publishes immediately or schedules the
 episode. Media files must be on the machine running Termicast; running on a VPS
 does not give it access to files on your desktop.
@@ -188,9 +189,21 @@ provider's URL or configure your web server, and it never deletes remote objects
 ## How do chapters and transcripts work?
 
 Managed chapters generate Podcasting 2.0 JSON Chapters in `chapters/<slug>.json`,
-linked as `application/json+chapters`. Transcripts are WebVTT files in
-`transcripts/<slug>.vtt`. Enter chronological, nonoverlapping ranges within the
-episode duration. Chapter titles allow 255 characters; soundbite titles allow 128.
+linked as `application/json+chapters`. Managed transcripts are WebVTT files in
+`transcripts/<slug>.vtt`: a SubRip (`.srt`) file you add is converted, as are
+cues missing the `WEBVTT` header. A transcript linked by an imported feed keeps
+its own format and is linked with the type that matches it -- `text/vtt`,
+`application/x-subrip` for SubRip, `text/plain`, `text/html`, or
+`application/json`.
+
+Enter a start time and title per chapter, in any order; the list sorts automatically
+and rejects duplicate starts. Each chapter runs until the next starts, and the last
+until the episode ends. Neither Podlove Simple Chapters nor Podcasting 2.0 JSON
+Chapters requires an end time, so Termicast does not generate one. Explicit imported
+ends are preserved until you edit that chapter. Chapter artwork accepts an HTTPS
+URL or a local JPEG/PNG/WebP path; local files are converted to hosted JPEGs.
+Chapter titles allow 255 characters; soundbites still use start/stop ranges and
+their titles allow 128.
 
 ## What does validate check, and what are its limits?
 

@@ -170,9 +170,6 @@ def extract_episode(item):
             if chapter.get(source):
                 entry[key] = chapter.get(source)
         episode["chapters"].append(entry)
-    for index, chapter in enumerate(episode["chapters"]):
-        chapter["endTime"] = (episode["chapters"][index + 1]["startTime"]
-                              if index + 1 < len(episode["chapters"]) else episode["duration"])
     return episode
 
 
@@ -191,9 +188,9 @@ def extract_episodes(template, mapping=None):
 def _convert_import_artwork(path, url, review_artwork, kind=""):
     """Normalize the staged copy to a flattened, correctly-sized RGB JPEG.
 
-    PNG artwork is always re-encoded to JPEG (smaller); JPEG artwork is only
+    PNG/WebP artwork is always re-encoded to JPEG; JPEG artwork is only
     touched when transparency or resizing requires it. Returns the final path,
-    which changes to a `.jpg` file when a PNG is transcoded.
+    which changes to a `.jpg` file when PNG or WebP is transcoded.
     """
     from PIL import Image, ImageOps
     from io import BytesIO
@@ -202,11 +199,11 @@ def _convert_import_artwork(path, url, review_artwork, kind=""):
     with Image.open(path) as image:
         mode, format_name, size = image.mode, image.format, image.size
         image.verify()
-    if format_name not in ("JPEG", "PNG"):
+    if format_name not in ("JPEG", "PNG", "WEBP"):
         return path  # The strict validator supplies the error for unsupported formats.
     resize = ((kind == "episode" and size != (3000, 3000)) or
               (kind == "show" and (size[0] != size[1] or not 1400 <= size[0] <= 3000)))
-    to_jpeg = format_name == "PNG"
+    to_jpeg = format_name in ("PNG", "WEBP")
     if not to_jpeg and mode == "RGB" and not resize:
         return path
     if review_artwork is None:
@@ -417,9 +414,19 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                                 chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
                         atomic_write(local_paths[url], (json.dumps(payload, allow_nan=False, indent=2) + "\n").encode())
                         return chapters
-                    if Path(urlsplit(url).path).suffix.lower() == ".vtt":
+                    suffix = Path(urlsplit(url).path).suffix.lower()
+                    if suffix == ".vtt":
                         from .assets import check_vtt
-                        check_vtt(local_paths[url].read_text(encoding="utf-8-sig"))
+                        staged = local_paths[url]
+                        original = staged.read_text(encoding="utf-8-sig")
+                        text = check_vtt(original)
+                        if text != original:
+                            atomic_write(staged, text.encode("utf-8"))
+                    elif suffix == ".srt":
+                        # SubRip is a transcript format of its own; the feed links
+                        # it as application/x-subrip rather than converting it.
+                        from .assets import check_srt
+                        check_srt(local_paths[url].read_text(encoding="utf-8-sig"))
                     elif not local_paths[url].stat().st_size:
                         raise ValueError("Linked transcript is empty")
                     return result
@@ -512,7 +519,6 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             for element in item.findall(_tag("podcast:chapters")):
                 url = element.get("url")
                 chapters = optional(url, "chapters", episode)
-                validation.backfill_chapter_ends(chapters, episode["duration"])
                 for chapter in chapters:
                     if chapter.get("img") and chapter["img"] not in mapping.values():
                         chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")

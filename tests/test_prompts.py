@@ -1,6 +1,7 @@
 """Cancelling a field unwinds to the enclosing menu without changing the record."""
 
 from unittest.mock import Mock
+import shutil
 
 import pytest
 
@@ -103,6 +104,244 @@ def test_segments_cancel_keeps_existing_entries(monkeypatch):
     monkeypatch.setattr(prompts, "number", raiser)
     existing = [{"startTime": 0, "endTime": 10, "title": "Kept"}]
     assert prompts._segments(existing, soundbites=False) == existing
+
+
+def test_chapters_sort_without_stop_or_empty_optional_fields(monkeypatch):
+    actions = iter([1, 1, 1, 4])
+    values = iter(["20", "Outro", "", "", "0", "Opening", "", "", "10", "Main", "", ""])
+    labels = []
+    displays = []
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: next(actions))
+    monkeypatch.setattr(prompts, "text", lambda label, *a, **k: labels.append(label) or next(values))
+    monkeypatch.setattr(prompts, "review", lambda name, data: displays.append(data))
+    chapters = prompts._segments([], False, episode={"duration": 30})
+    assert chapters == [{"startTime": 0, "title": "Opening"}, {"startTime": 10, "title": "Main"},
+                        {"startTime": 20, "title": "Outro"}]
+    assert not any("Stop" in label for label in labels)
+    assert displays[-1]["1"] == "00:00:00 → 00:00:10   Opening"
+    assert displays[-1]["3"] == "00:00:20 → 00:00:30   Outro"
+
+
+def test_duplicate_chapter_start_reprompts(monkeypatch):
+    actions = iter([1, 4])
+    values = iter(["0", "Duplicate", "", "", "10", "Second", "", ""])
+    errors = []
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: next(actions))
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: next(values))
+    monkeypatch.setattr(prompts, "error", errors.append)
+    chapters = prompts._segments([{"startTime": 0, "title": "First"}], False)
+    assert [c["startTime"] for c in chapters] == [0, 10]
+    assert errors == ["Another chapter already starts at 00:00:00"]
+
+
+def test_chapter_edit_drops_stale_ends_but_preserves_other_gaps(monkeypatch):
+    actions = iter([2, 3, 4])  # Edit third chapter, moving it before the second.
+    values = iter(["15", "Moved", "", ""])
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: next(actions))
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: next(values))
+    existing = [{"startTime": 0, "endTime": 20, "title": "First"},
+                {"startTime": 20, "endTime": 25, "title": "Gap"},
+                {"startTime": 30, "endTime": 60, "title": "Last", "img": "", "url": ""}]
+    chapters = prompts._segments(existing, False)
+    assert chapters == [{"startTime": 0, "title": "First"}, {"startTime": 15, "title": "Moved"},
+                        {"startTime": 20, "endTime": 25, "title": "Gap"}]
+    assert existing[0]["endTime"] == 20
+    assert existing[2]["endTime"] == 60
+
+
+def test_chapter_title_limit(monkeypatch):
+    values = iter(["0", "x" * 256, "Valid", "", ""])
+    errors = []
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: next(values))
+    monkeypatch.setattr(prompts, "error", errors.append)
+    assert prompts._chapter_entry({}, None, {})["title"] == "Valid"
+    assert errors
+
+
+@pytest.mark.parametrize("slug", ["ep001", ""])
+def test_local_chapter_art_uses_free_index_after_sorting(tmp_path, monkeypatch, slug):
+    from pathlib import Path
+    from PIL import Image
+    from termicast.models import new_episode, new_show, chapter_image_relative
+    show = new_show(base_url="https://e.org/show", output_dir=str(tmp_path / "out"))
+    episode = new_episode(guid="opaque/imported/id", slug=slug, duration=60)
+    existing = []
+    for start, index in [(0, 3), (30, 1)]:
+        relative = chapter_image_relative(slug, index, ".jpg", guid=episode["guid"])
+        existing.append({"startTime": start, "title": str(start), "img": "https://e.org/show/" + relative})
+        path = tmp_path / "out" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"existing")
+    source = tmp_path / "new.webp"
+    Image.new("RGB", (100, 50)).save(source)
+    values = iter(["10", "New", str(source), ""])
+    actions = iter([1, 4])
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: next(actions))
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: next(values))
+    result = prompts._segments(existing, False, show=show, episode=episode)
+    relative = chapter_image_relative(slug, 2, ".jpg", guid=episode["guid"])
+    assert result[1]["img"] == "https://e.org/show/" + relative
+    with Image.open(tmp_path / "out" / relative) as image:
+        assert (image.format, image.size) == ("JPEG", (100, 50))
+    assert (tmp_path / "out" / Path(existing[0]["img"].removeprefix("https://e.org/show/"))).read_bytes() == b"existing"
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_remote_webp_artwork_conversion_offer(tmp_path, monkeypatch, accept):
+    from io import BytesIO
+    from PIL import Image
+    from termicast import validation
+    from termicast.models import new_show
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show")
+    content = BytesIO()
+    Image.new("RGB", (1400, 1400)).save(content, "WEBP")
+    monkeypatch.setattr(validation, "_download", lambda url, handle, limit: handle.write(content.getvalue()))
+    values = iter(["https://source.e.org/cover.webp", ""])
+    confirms = []
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: next(values))
+    monkeypatch.setattr(prompts, "confirm", lambda label, *a: confirms.append(label) or
+                        (accept if "Convert and host" in label else True))
+    result = prompts._artwork("", False, show=show)
+    assert "Convert and host this artwork?" in confirms
+    if accept:
+        assert result == "https://e.org/show/images/cover.jpg"
+        assert validation.inspect_local_artwork(tmp_path / "out/images/cover.jpg") == []
+    else:
+        assert result == ""
+        assert not (tmp_path / "out/images/cover.jpg").exists()
+
+
+def test_show_artwork_avoids_existing_episode_cover(tmp_path, monkeypatch):
+    from PIL import Image
+    from termicast.models import new_show
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show")
+    image = tmp_path / "out/images/cover.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"episode art")
+    source = tmp_path / "cover.webp"
+    Image.new("RGB", (50, 50)).save(source)
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: str(source))
+    prompts.edit_field(show, "artwork_url")
+    assert show["artwork_url"] == "https://e.org/show/images/cover-2.jpg"
+    assert image.read_bytes() == b"episode art"
+
+
+def test_show_artwork_avoids_episode_cover_evicted_from_local_disk(tmp_path, monkeypatch):
+    from PIL import Image
+    from termicast.models import new_show
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show",
+                    hosting="s3", asset_base_url="https://cdn.e.org/show")
+    feed = tmp_path / "out/feed.xml"
+    feed.parent.mkdir()
+    feed.write_text('<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">'
+                    '<channel><item><itunes:image href="https://cdn.e.org/show/images/cover.jpg"/>'
+                    '</item></channel></rss>')
+    source = tmp_path / "cover.webp"
+    Image.new("RGB", (50, 50)).save(source)
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: str(source))
+    prompts.edit_field(show, "artwork_url")
+    assert show["artwork_url"] == "https://cdn.e.org/show/images/cover-2.jpg"
+
+
+def test_chapter_image_index_claims_ignore_suffix_and_allow_own_index(tmp_path, monkeypatch):
+    from PIL import Image
+    from termicast.models import new_episode, new_show
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show")
+    old = {"startTime": 0, "title": "Old", "img": "https://e.org/show/images/chapters/ep001-02.jpg"}
+    other = {"startTime": 10, "title": "Other", "img": "https://e.org/show/images/chapters/ep001-01.png"}
+    episode = new_episode(slug="ep001", chapters=[old, other])
+    source = tmp_path / "new.webp"
+    Image.new("RGB", (50, 50)).save(source)
+    values = iter(["0", "Edited", str(source), ""])
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: next(values))
+    entry = prompts._chapter_entry(old, show, episode)
+    assert entry["img"] == old["img"]
+
+
+@pytest.mark.parametrize("slug", ["ep042", ""])
+@pytest.mark.parametrize("remote", [False, True])
+def test_episode_artwork_updates_managed_path(tmp_path, monkeypatch, slug, remote):
+    from PIL import Image
+    from termicast import validation
+    from termicast.models import new_episode, new_show, chapter_filename
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show")
+    episode = new_episode(guid="external/id", slug=slug, artwork_url="https://e.org/show/images/old.png",
+                          image_path="images/old.png")
+    source = tmp_path / "cover.webp"
+    Image.new("RGB", (50, 50)).save(source)
+    monkeypatch.setattr(validation, "_download", lambda url, handle, limit: handle.write(source.read_bytes()))
+    monkeypatch.setattr(prompts, "text", lambda *a, **k: "https://source.e.org/cover.webp" if remote else str(source))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: True)
+    prompts.edit_field(episode, "artwork_url", episode=True, show=show)
+    stem = slug or chapter_filename(episode["guid"]).removesuffix(".json")
+    relative = f"images/episodes/{stem}.jpg"
+    assert episode["artwork_url"] == "https://e.org/show/" + relative
+    assert episode["image_path"] == relative
+    assert (tmp_path / "out" / relative).is_file()
+    assert not (tmp_path / "out/images" / (stem + ".jpg")).exists()
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="FFmpeg required")
+@pytest.mark.parametrize("hosting", ["local", "s3"])
+def test_add_webp_episode_and_manual_chapters_through_publication(db, show, tmp_path, monkeypatch, capsys, hosting):
+    import json
+    import subprocess
+    from pathlib import Path
+    from PIL import Image
+    from conftest import make_wav
+    from termicast import s3deploy
+    from termicast.feed import NS, validate_feed
+    from termicast.publisher import Publisher, episode_asset_paths
+    from termicast.storage import asset_url
+    from termicast.validation import inspect_local_artwork, validate_episode
+    from lxml import etree
+    if hosting == "s3":
+        show.update(hosting="s3", enabled=True, bucket="my-bucket", prefix="twp",
+                    asset_base_url="https://cdn.example.org/twp", keep_local_media=True)
+        show = db.save_show(show)
+        monkeypatch.setattr(s3deploy, "check_s3_access", lambda show: None)
+        monkeypatch.setattr("termicast.hosting.check_url", lambda *a, **k: [])
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "_run", run)
+    monkeypatch.setattr(s3deploy, "s4cmd_path", lambda: "s4cmd")
+    audio = make_wav(tmp_path / "episode.wav", seconds=2)
+    cover = tmp_path / "cover.webp"
+    Image.new("RGB", (3000, 3000)).save(cover)
+    chapter_art = tmp_path / "chapter.webp"
+    Image.new("RGB", (100, 50)).save(chapter_art)
+    actions = iter([5, 2, 1, 1, 1, 4, 2])
+    values = iter(["Episode", "Description", "1.5", "Outro", "", "",
+                   "0", "Intro", str(chapter_art), "", "0.5", "Main", "", ""])
+    labels = []
+    monkeypatch.setattr(prompts, "menu", lambda *a, **k: next(actions))
+    monkeypatch.setattr(prompts, "text", lambda label, *a, **k: labels.append(label) or next(values))
+    monkeypatch.setattr(prompts, "confirm", lambda *a, **k: True)
+    prompts.add_episode(db, Publisher(db), show, [audio, cover], slug="ep001")
+    saved = db.list_episodes(show["id"])[0]
+    assert saved["status"] == "published"
+    assert validate_episode(saved) == []
+    assert [chapter["startTime"] for chapter in saved["chapters"]] == [0, 0.5, 1.5]
+    assert all("endTime" not in chapter for chapter in saved["chapters"])
+    assert saved["chapters"][0]["img"].endswith("/images/chapters/ep001-01.jpg")
+    assert "images/chapters/ep001-01.jpg" in episode_asset_paths(saved, show)
+    root = Path(show["output_dir"])
+    relative = "images/episodes/ep001.jpg"
+    assert saved["image_path"] == relative
+    assert saved["artwork_url"] == asset_url(show, relative)
+    assert relative in episode_asset_paths(saved, show)
+    assert inspect_local_artwork(root / relative, episode=True) == []
+    assert not (root / "images/ep001.jpg").exists()
+    assert json.loads((root / "chapters/ep001.json").read_text())["chapters"] == saved["chapters"]
+    assert validate_feed((root / "feed.xml").read_bytes()) == []
+    feed = etree.fromstring((root / "feed.xml").read_bytes())
+    assert feed.find("channel/item/itunes:image", NS).get("href") == saved["artwork_url"]
+    if hosting == "s3":
+        targets = [call.args[0][-1] for call in run.call_args_list]
+        assert "s3://my-bucket/twp/images/episodes/ep001.jpg" in targets
+        assert "s3://my-bucket/twp/images/chapters/ep001-01.jpg" in targets
+        assert "s3://my-bucket/twp/images/ep001.jpg" not in targets
+    assert not any("Stop" in label for label in labels)
+    assert "WEBP to JPEG" in capsys.readouterr().out
 
 
 def test_secret_masks_input_when_not_a_tty(monkeypatch):

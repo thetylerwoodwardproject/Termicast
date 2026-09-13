@@ -33,7 +33,7 @@ def _artwork_reviewer():
 
     def review(url, format_name, mode, size, target_size=None):
         nonlocal automatic
-        note = " PNG will be converted to JPEG." if format_name == "PNG" else ""
+        note = f" {format_name} will be converted to JPEG." if format_name in ("PNG", "WEBP") else ""
         console.print(f"Artwork needs conversion\nSource: {url}\n"
                       f"Detected: {format_name}, {mode}, {size[0]}×{size[1]}\n"
                       f"Required: RGB.{note} Transparency, if present, will be flattened onto white.",
@@ -690,12 +690,12 @@ def main(argv=None):
     validate.add_argument("show_id", nargs="?", help="Podcast ID; omit to validate all feeds.")
     add = commands.add_parser("add", help="Create an episode from local media files.")
     add.add_argument("show_id")
-    add.add_argument("files", nargs="+", help="Audio (required), then optional artwork and transcript.")
+    add.add_argument("files", nargs="+", help="Audio (required), then optional JPEG/PNG/WebP artwork and transcript.")
     add.add_argument("--slug", help="Editorial slug such as s02ep042.")
     add.add_argument("--audio-preset", choices=("standard", "music"), help="Override the show's audio preset.")
     add.add_argument("--image-preset", choices=("compact", "detail"), help="Override the show's image preset.")
     add.add_argument("--keep-audio", action="store_true", help="Keep the original audio instead of optimizing.")
-    add.add_argument("--keep-image", action="store_true", help="Keep the original artwork instead of optimizing.")
+    add.add_argument("--keep-image", action="store_true", help="Keep original JPEG/PNG artwork; WebP must be converted.")
     deploy = commands.add_parser("deploy", help="Upload saved media assets to S3; verify by default. With 'Mirror feed.xml to S3' enabled, also uploads a copy of feed.xml.")
     deploy.add_argument("show_id")
     deploy.add_argument("--dry-run", action="store_true", help="No uploads or bucket probes.")

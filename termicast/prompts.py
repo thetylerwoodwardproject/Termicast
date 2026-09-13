@@ -23,8 +23,8 @@ from rich.text import Text
 from .models import (new_episode, new_show, positions_by_type, scheme_slug, slug_error, suggest_slug)
 from .faq import FAQ
 from .validation import (
-    CATEGORIES, inspect_artwork, local_to_utc, parse_time, probe_media,
-    validate_episode, validate_show,
+    ArtworkNeedsConversion, CATEGORIES, chapter_ends, inspect_artwork, local_to_utc,
+    parse_time, probe_media, validate_episode, validate_show,
 )
 
 ACCENT = "#39ff14"
@@ -163,8 +163,8 @@ EPISODE_DETAIL_FIELDS = (
     "explicit", "keywords",
 )
 SHOW_ESSENTIALS = (
-    "title", "description", "author", "owner_email", "artwork_url",
-    "explicit", "timezone", "category", "output_dir", "base_url",
+    "title", "description", "author", "owner_email", "output_dir", "base_url",
+    "artwork_url", "explicit", "timezone", "category",
 )
 
 S3_SETTINGS = ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")
@@ -393,14 +393,15 @@ PROMPT_EXAMPLES = {
     "feed url": "https://example.com/another-show/feed.xml",
     "start": "00:01:30 or 90 (starts at 90 seconds)",
     "stop": "00:02:00 or 120 (ends at 120 seconds)",
-    "chapter artwork url": "https://media.example.com/my-show/images/chapter-1.png",
+    "chapter artwork": "/home/alex/podcast/chapter-1.webp or https://media.example.com/my-show/images/chapter-1.jpg",
     "chapter link": "https://example.com/my-show/notes#chapter-1",
     "chapter json path or https url": "/home/alex/podcast/chapters.json or https://example.com/chapters.json",
-    "vtt path or https url": "/home/alex/podcast/episode-42.vtt or https://example.com/episode-42.vtt",
+    "vtt/srt path or https url": "/home/alex/podcast/episode-42.vtt or https://example.com/episode-42.srt",
     "slug": "s02ep042 or the-hidden-cost-of-internet",
     "audio file path": "/home/alex/podcast/episode-42.mp3",
-    "artwork file path": "/home/alex/podcast/cover.png",
-    "transcript file path": "/home/alex/podcast/episode-42.vtt",
+    "artwork file path": "/home/alex/podcast/cover.webp (JPEG/PNG/WebP)",
+    "artwork url or local file path": "/home/alex/podcast/cover.webp or https://media.example.com/cover.jpg",
+    "transcript file path": "/home/alex/podcast/episode-42.vtt or /home/alex/podcast/episode-42.srt",
 }
 
 PROMPT_HELP = {
@@ -541,18 +542,73 @@ def review(title, data):
     console.print(table)
 
 
-def _artwork(current, episode):
+def _artwork_prompt(current, *, show, stem, kind, folder="images", label=None):
+    from .media import install_artwork
+    from .storage import asset_url
+    label = label or ("Artwork URL or local file path (JPEG/PNG/WebP)" if show is not None else
+                      "Artwork URL (HTTPS; episode artwork must be 3000x3000)")
     while True:
-        url = text("Artwork URL (HTTPS; episode artwork must be 3000x3000)", current)
-        if not url or not confirm("Inspect remote artwork dimensions?", True):
+        url = text(label, current)
+        if not url:
             return url
         try:
-            for message in inspect_artwork(url, episode=episode):
+            if show is not None and "://" not in url:
+                return install_artwork(show, url, stem=stem, folder=folder, kind=kind)[1]
+            if not confirm("Inspect remote artwork dimensions?", True):
+                return url
+            options = {"episode": kind == "episode"}
+            if kind == "chapter":
+                options["chapter"] = True
+            for message in inspect_artwork(url, **options):
                 warning(message)
             return url
-        except ValueError as exc:
+        except ArtworkNeedsConversion as exc:
+            if show is not None:
+                size = exc.required_size or exc.size
+                console.print(
+                    f"Artwork at this URL is {exc.format}, {exc.mode}, {exc.size[0]}×{exc.size[1]}. "
+                    f"{exc}\nTermicast can download it, convert it to RGB JPEG at "
+                    f"{size[0]}×{size[1]}, and host it at\n"
+                    f"{asset_url(show, f'{folder}/{stem}.jpg')}", markup=False)
+                if confirm("Convert and host this artwork?", True):
+                    try:
+                        return install_artwork(show, url, stem=stem, folder=folder, kind=kind)[1]
+                    except (OSError, ValueError) as conversion_error:
+                        error(conversion_error)
+                        current = url
+                        continue
             error(exc)
-            current = url
+        except (OSError, ValueError) as exc:
+            error(exc)
+        current = url
+
+
+def _artwork(current, episode, show=None, data=None):
+    from .models import chapter_filename
+    from .storage import asset_root, asset_url, local_relative
+    stem = "cover"
+    if episode and data is not None:
+        stem = data.get("slug") or chapter_filename(data["guid"]).removesuffix(".json")
+    elif show is not None:
+        # Uploaded episode artwork may no longer have a local working copy.
+        # Reserve its published name as well as names still present on disk.
+        claimed = set()
+        feed = asset_root(show) / "feed.xml"
+        if feed.is_file():
+            from lxml import etree
+            from .feed import NS
+            root = etree.parse(str(feed), etree.XMLParser(resolve_entities=False, no_network=True))
+            urls = [image.get("href") for image in root.findall("channel/item/itunes:image", NS)]
+            urls.extend(image.text for image in root.findall("channel/item/image/url"))
+            claimed = {local_relative(show, url) for url in urls}
+        index = 1
+        while (Path(f"images/{stem}.jpg") in claimed or
+               ((asset_root(show) / f"images/{stem}.jpg").exists()
+                and current != asset_url(show, f"images/{stem}.jpg"))):
+            index += 1
+            stem = f"cover-{index}"
+    return _artwork_prompt(current, show=show, stem=stem, kind="episode" if episode else "show",
+                           folder="images/episodes" if episode else "images")
 
 
 def _podroll(current):
@@ -593,11 +649,72 @@ def _podroll(current):
             entries[index] = updated
 
 
-def _segments(current, soundbites):
+def _soundbite_entry(old):
+    while True:
+        start = number("Start (HH:MM:SS, MM:SS, or seconds)", old.get("startTime", 0))
+        stop = old["startTime"] + old["duration"] if old else None
+        end = number("Stop (HH:MM:SS, MM:SS, or seconds)", stop)
+        if end <= start:
+            error("Stop must be after start.")
+            continue
+        title = text("Title (maximum 128 characters)", old.get("title", ""), required=True)
+        if len(title) > 128:
+            error("Soundbite titles must not exceed 128 characters.")
+            continue
+        entry = dict(old, startTime=start, duration=end - start, title=title)
+        if "stop" in entry:
+            entry["stop"] = end
+        if not 15 <= end - start <= 120:
+            warning("Recommended soundbite duration is 15 to 120 seconds.")
+        return entry
+
+
+def _chapter_entry(old, show, episode):
+    from .models import chapter_image_relative
+    from .storage import local_relative
+    start = number("Start (HH:MM:SS, MM:SS, or seconds)", old.get("startTime", 0))
+    title = ask("Title", old.get("title", ""), required=True, parse=_length_limited(255))
+    entry = dict(old, startTime=start, title=title)
+    entry.pop("endTime", None)
+    stem = ""
+    if show is not None:
+        claimed = {relative.with_suffix("") for chapter in episode.get("chapters", [])
+                   if chapter is not old and (relative := local_relative(show, chapter.get("img"))) is not None}
+        index = 1
+        while True:
+            relative = chapter_image_relative(episode.get("slug"), index, ".jpg", guid=episode["guid"])
+            if Path(relative).with_suffix("") not in claimed:
+                stem = Path(relative).stem
+                break
+            index += 1
+    img = _artwork_prompt(old.get("img", ""), show=show, stem=stem, kind="chapter",
+                          folder="images/chapters",
+                          label="Chapter artwork (optional HTTPS URL or local JPEG/PNG/WebP path)" if show is not None
+                          else "Chapter artwork URL (optional HTTPS JPEG/PNG RGB)")
+    url = text("Chapter link (optional HTTPS)", old.get("url", ""))
+    for key, value in (("img", img), ("url", url)):
+        if value:
+            entry[key] = value
+        else:
+            entry.pop(key, None)
+    return entry
+
+
+def _segment_time(value):
+    from .feed import _chapter_time
+    return _chapter_time(value).rstrip("0").rstrip(".") if value is not None else "?"
+
+
+def _segments(current, soundbites, show=None, episode=None):
     entries = deepcopy(current or [])
     name = "Soundbites" if soundbites else "Chapters"
     while True:
-        review(name, {str(i + 1): entry for i, entry in enumerate(entries)})
+        if soundbites:
+            review(name, {str(i + 1): entry for i, entry in enumerate(entries)})
+        else:
+            ends = chapter_ends(entries, (episode or {}).get("duration"))
+            review(name, {str(i + 1): f"{_segment_time(entry['startTime'])} → {_segment_time(end)}   {entry.get('title', '')}"
+                          for i, (entry, end) in enumerate(zip(entries, ends))})
         action = menu(name, ["Add", "Edit", "Remove", "Done"], 4)
         if action == 4:
             return entries
@@ -617,45 +734,35 @@ def _segments(current, soundbites):
             old = entries[index]
         try:
             while True:
-                start = number("Start (HH:MM:SS, MM:SS, or seconds)", old.get("startTime", 0))
-                stop = old.get("endTime")
-                if soundbites and old:
-                    stop = old["startTime"] + old["duration"]
-                end = number("Stop (HH:MM:SS, MM:SS, or seconds)", stop)
-                if end <= start:
-                    error("Stop must be after start.")
+                entry = (_soundbite_entry(old) if soundbites else
+                         _chapter_entry(old, show, dict(episode or {}, chapters=entries)))
+                start = entry["startTime"]
+                if soundbites:
+                    end = start + entry["duration"]
+                    previous = entries[index - 1] if index else None
+                    following = entries[index + 1] if index + 1 < len(entries) else None
+                    previous_end = previous["startTime"] + previous["duration"] if previous else 0
+                    if start < previous_end or (following and end > following["startTime"]):
+                        error("Entries must be chronological and must not overlap.")
+                        continue
+                elif any(other["startTime"] == start for i, other in enumerate(entries) if i != index):
+                    error(f"Another chapter already starts at {_segment_time(start)}")
                     continue
-                previous = entries[index - 1] if index else None
-                following = entries[index + 1] if index + 1 < len(entries) else None
-                previous_end = (previous.get("endTime", previous["startTime"] +
-                                previous.get("duration", 0)) if previous else 0)
-                if start < previous_end or (following and end > following["startTime"]):
-                    error("Entries must be chronological and must not overlap.")
-                    continue
-                title = text("Title (maximum 128 characters)" if soundbites else "Title",
-                             old.get("title", ""), required=True)
-                if soundbites and len(title) > 128:
-                    error("Soundbite titles must not exceed 128 characters.")
-                    continue
-                entry = dict(old, startTime=start, title=title)
-                entry["duration" if soundbites else "endTime"] = end - start if soundbites else end
-                if soundbites and "stop" in entry:
-                    entry["stop"] = end
-                if not soundbites:
-                    entry["img"] = text("Chapter artwork URL (optional HTTPS JPEG/PNG RGB)", old.get("img", ""))
-                    entry["url"] = text("Chapter link (optional HTTPS)", old.get("url", ""))
-                if soundbites and not 15 <= end - start <= 120:
-                    warning("Recommended soundbite duration is 15 to 120 seconds.")
                 if action == 1:
                     entries.append(entry)
                 else:
                     entries[index] = entry
+                if not soundbites:
+                    entries.sort(key=lambda chapter: chapter["startTime"])
+                    for chapter, following in zip(entries, entries[1:]):
+                        if chapter.get("endTime", following["startTime"]) > following["startTime"]:
+                            chapter.pop("endTime", None)
                 break
         except Cancelled:
             console.print("Cancelled. This entry was not saved.")
 
 
-def edit_field(data, field, episode=False):
+def edit_field(data, field, episode=False, show=None):
     current = data.get(field)
     label = field.replace("_", " ").title()
     if field in ("locked", "explicit", "enabled"):
@@ -680,11 +787,15 @@ def edit_field(data, field, episode=False):
         data[field] = ask("IANA timezone (e.g. America/New_York)", current or "UTC",
                           required=True, parse=_parse_timezone)
     elif field == "artwork_url":
-        data[field] = _artwork(current, episode)
+        data[field] = _artwork(current, episode, show=show if episode else data, data=data)
+        if episode and data[field] != current:
+            from .storage import local_relative
+            relative = local_relative(show, data[field]) if show is not None else None
+            data["image_path"] = str(relative) if relative else ""
     elif field == "podroll":
         data[field] = _podroll(current)
     elif field in ("soundbites", "chapters"):
-        data[field] = _segments(current, field == "soundbites")
+        data[field] = _segments(current, field == "soundbites", show=show, episode=data)
     elif field in ("length", "duration", "episode_number", "season_number"):
         data[field] = number(label + (" (bytes)" if field == "length" else ""), current,
                              integer=field != "duration",
@@ -715,7 +826,7 @@ def edit_field(data, field, episode=False):
                     warning(f"Media probe failed; enter size and duration manually: {exc}")
 
 
-def edit_menu(data, fields, episode=False):
+def edit_menu(data, fields, episode=False, show=None):
     selected = menu("Edit field", [field.replace("_", " ").title() for field in fields]
                     + ["Back"])
     if selected <= len(fields):
@@ -724,7 +835,7 @@ def edit_menu(data, fields, episode=False):
             if field == "hosting":
                 hosting_form(data)
                 return
-            edit_field(data, field, episode)
+            edit_field(data, field, episode, show=show)
         except Cancelled:
             console.print(f"Cancelled. {field.replace('_', ' ').title()} is unchanged.")
             return
@@ -880,7 +991,7 @@ def optional_assets(episode, show):
     from .models import chapters_relative
 
     action = menu("Optional assets", ["Chapters JSON (local path or HTTPS URL)",
-                                      "Chapters manually", "Transcript VTT (local path or HTTPS URL)", "Back"], 4)
+                                      "Chapters manually", "Transcript VTT/SRT (local path or HTTPS URL)", "Back"], 4)
     try:
         if action == 1:
             value = read_chapters(text("Chapter JSON path or HTTPS URL", required=True), episode)
@@ -889,12 +1000,12 @@ def optional_assets(episode, show):
                 episode["chapters"] = value
                 episode.setdefault("_replace_fields", []).append("chapters")
         elif action == 2:
-            value = _segments(episode.get("chapters", []), False)
+            value = _segments(episode.get("chapters", []), False, show=show, episode=episode)
             if value != episode.get("chapters", []):
                 episode["chapters"] = value
                 episode.setdefault("_replace_fields", []).append("chapters")
         elif action == 3:
-            value = check_vtt(read_asset(text("VTT path or HTTPS URL", required=True)))
+            value = check_vtt(read_asset(text("VTT/SRT path or HTTPS URL", required=True)))
             from .storage import asset_root, asset_url
             filename = chapters_relative(episode).split("/", 1)[1]
             url = asset_url(show, "transcripts/" + filename)
@@ -977,7 +1088,7 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
 
     for field in ("title", "description"):
         try:
-            edit_field(episode, field, episode=True)
+            edit_field(episode, field, episode=True, show=show)
         except Cancelled:
             console.print(f"Cancelled. Set the {field} from the review below before publishing.")
 
@@ -994,7 +1105,7 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
         if action == 4:
             return
         if action == 1:
-            edit_menu(episode, EPISODE_DETAIL_FIELDS, episode=True)
+            edit_menu(episode, EPISODE_DETAIL_FIELDS, episode=True, show=show)
             continue
         errors = validate_episode(episode)
         if errors:
@@ -1023,9 +1134,9 @@ def episode_form(show, publisher, db):
     try:
         paths = [text("Audio file path (mp3, wav, flac, m4a, ogg, opus)", required=True)]
         if confirm("Add cover artwork file?", False):
-            paths.append(text("Artwork file path (JPEG/PNG)", required=True))
-        if confirm("Add a WebVTT transcript file?", False):
-            paths.append(text("Transcript file path (.vtt)", required=True))
+            paths.append(text("Artwork file path (JPEG/PNG/WebP)", required=True))
+        if confirm("Add a transcript file (WebVTT or SubRip)?", False):
+            paths.append(text("Transcript file path (.vtt or .srt)", required=True))
     except Cancelled:
         console.print("Cancelled. No episode was added.")
         return
@@ -1126,7 +1237,7 @@ def edit_episode_form(db, show, publisher, saved):
         if choice == "Cancel":
             return
         if choice == "Edit field":
-            edit_menu(episode, EPISODE_FIELDS, episode=True)
+            edit_menu(episode, EPISODE_FIELDS, episode=True, show=show)
             continue
         if choice == "Rename files":
             if episode != saved:
