@@ -169,24 +169,57 @@ def _insert_block(name, content):
     return None
 
 
-def apply_mime_patch(name, path, executable):
-    """Insert the MIME block into the config, validate, and restore on failure.
+def _find_existing_block(name, lines):
+    """Locate an existing Termicast MIME block, or None if absent.
 
-    Returns `(backup, changed)` where `changed` is False when the block is
-    already present. Does not reload; the caller offers that separately.
+    Returns `(start, end)` inclusive line indices. Nginx blocks run from the
+    marker comment to their closing brace; Apache blocks are the run of
+    `AddType` lines immediately after the marker.
+    """
+    start = None
+    for index, line in enumerate(lines):
+        if MIME_MARKER in line:
+            start = index
+            break
+    if start is None:
+        return None
+    if name == "Nginx":
+        for index in range(start, len(lines)):
+            if lines[index].strip() == "}":
+                return start, index
+        return None
+    end = start
+    while end + 1 < len(lines) and lines[end + 1].strip().startswith("AddType"):
+        end += 1
+    return start, end
+
+
+def apply_mime_patch(name, path, executable):
+    """Insert or upgrade the MIME block, validate, and restore on failure.
+
+    Returns `(backup, changed)` where `changed` is False only when the current
+    block is already present and up to date. Does not reload; the caller offers
+    that separately.
     """
     path = Path(path).expanduser().resolve(strict=True)
     if not path.is_file():
         raise ValueError("Choose an existing site configuration file")
     original = _read_bytes(path)
     content = original.decode("utf-8", errors="replace")
-    if MIME_MARKER in content:
+    lines = content.splitlines()
+    block = mime_snippet(name).rstrip("\n").split("\n")
+    bounds = _find_existing_block(name, lines)
+    if bounds is not None and lines[bounds[0]:bounds[1] + 1] == block:
         return None, False
-    new_lines = _insert_block(name, content)
-    if new_lines is None:
-        raise ValueError(
-            "Could not find a server block to patch in the configuration. Add the "
-            "MIME mappings manually inside the site's server/Directory block.")
+    if bounds is not None:
+        start, end = bounds
+        new_lines = lines[:start] + block + lines[end + 1:]
+    else:
+        new_lines = _insert_block(name, content)
+        if new_lines is None:
+            raise ValueError(
+                "Could not find a server block to patch in the configuration. Add the "
+                "MIME mappings manually inside the site's server/Directory block.")
     backup = _backup(path, original)
     _write_bytes(path, ("\n".join(new_lines) + "\n").encode("utf-8"))
     try:

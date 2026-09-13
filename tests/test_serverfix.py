@@ -167,11 +167,32 @@ def test_apply_mime_patch_inserts_and_validates(tmp_path, monkeypatch):
 def test_apply_mime_patch_is_idempotent(tmp_path, monkeypatch):
     _backups(tmp_path, monkeypatch)
     config = tmp_path / "site.conf"
-    config.write_text("server {\n    server_name media.example.me;\n    # " + serverfix.MIME_MARKER + "\n}\n")
+    block = serverfix.mime_snippet("Nginx").rstrip("\n")
+    config.write_text("server {\n    server_name media.example.me;\n" + block + "\n}\n")
     monkeypatch.setattr(serverfix, "run_control", Mock())
     backup, changed = serverfix.apply_mime_patch("Nginx", config, "/usr/sbin/nginx")
     assert changed is False
     assert backup is None
+
+
+def test_apply_mime_patch_upgrades_outdated_block(tmp_path, monkeypatch):
+    _backups(tmp_path, monkeypatch)
+    config = tmp_path / "site.conf"
+    old_block = (
+        "# Termicast podcast MIME types\n"
+        "types {\n"
+        "    application/rss+xml       xml;\n"
+        "    application/json+chapters json;\n"
+        "    image/jpeg                jpg jpeg;\n"
+        "}\n"
+    )
+    config.write_text("server {\n    server_name media.example.me;\n" + old_block + "}\n")
+    monkeypatch.setattr(serverfix, "run_control", Mock())
+    backup, changed = serverfix.apply_mime_patch("Nginx", config, "/usr/sbin/nginx")
+    assert changed is True
+    content = config.read_text()
+    assert "image/png" in content
+    assert "image/webp" in content
 
 
 def test_apply_mime_patch_restores_on_validation_failure(tmp_path, monkeypatch):
