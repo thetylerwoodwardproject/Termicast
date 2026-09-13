@@ -30,7 +30,10 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
     """
     destination = Path(destination or db.path.parent / "backups").expanduser().resolve()
     now = datetime.now(timezone.utc)
-    name = f"termicast-{now.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:8]}.zip"
+    # Not `name`: the include_media walk below binds `name` per directory
+    # entry, which used to clobber this and name the ZIP after the last
+    # media file it saw.
+    archive_name = f"termicast-{now.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:8]}.zip"
     with (nullcontext() if _locked else db.lock()), ExitStack() as locks:
         shows = db.list_shows()
         for show in shows:
@@ -59,7 +62,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                     source.backup(target)
             finally:
                 target.close()
-            archive_path = Path(staging) / name
+            archive_path = Path(staging) / archive_name
             with archive_path.open("xb") as handle:
                 os.fchmod(handle.fileno(), 0o600)
                 with ZipFile(handle, "w", compression=ZIP_DEFLATED) as archive:
@@ -120,7 +123,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                     archive.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            result = destination / name
+            result = destination / archive_name
             os.link(archive_path, result)
             fsync_dir(destination)
     return result
