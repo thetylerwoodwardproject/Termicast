@@ -39,9 +39,6 @@ def slug_error(slug):
     return None
 
 
-def validate_slug(slug) -> bool:
-    return slug_error(slug) is None
-
 
 def numbered_slug(episode, position=None, *, seasons=True, default_season=None, word="ep") -> str:
     """Sequential, human-readable name: s01ep001 with a season, ep001 without.

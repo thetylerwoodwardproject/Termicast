@@ -1,4 +1,3 @@
-import os
 import subprocess
 from unittest.mock import Mock
 
@@ -10,51 +9,6 @@ from termicast import serverfix
 def test_detection_uses_control_tools(monkeypatch):
     monkeypatch.setattr(serverfix.shutil, "which", lambda name: "/tools/" + name)
     assert serverfix.detect_servers() == {"Nginx": "/tools/nginx", "Apache": "/tools/apache2ctl"}
-
-
-def prepare(monkeypatch, tmp_path):
-    config = tmp_path / "site.conf"
-    config.write_text("original")
-    monkeypatch.setenv("EDITOR", "editor --wait")
-    monkeypatch.delenv("VISUAL", raising=False)
-    monkeypatch.setattr(serverfix.shutil, "which", lambda name: "/bin/" + name)
-    monkeypatch.setattr(serverfix.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "backups"))
-    (tmp_path / "backups").mkdir()
-    def edit(args):
-        assert args == ["editor", "--wait", str(config)]
-        config.write_text("corrected")
-        return Mock(returncode=0)
-    monkeypatch.setattr(serverfix.subprocess, "run", edit)
-    return config
-
-
-def test_edit_validates_and_retains_backup_without_reload(monkeypatch, tmp_path):
-    config = prepare(monkeypatch, tmp_path)
-    control = Mock()
-    monkeypatch.setattr(serverfix, "run_control", control)
-    backup, changed = serverfix.edit_site_config(config, "/bin/nginx")
-    assert changed
-    assert backup.read_text() == "original"
-    assert backup.stat().st_mode & 0o777 == 0o600
-    assert config.read_text() == "corrected"
-    assert control.call_args_list == [(("/bin/nginx", "-t"),), (("/bin/nginx", "-t"),)]
-
-
-def test_invalid_edit_restores_original(monkeypatch, tmp_path):
-    config = prepare(monkeypatch, tmp_path)
-    monkeypatch.setattr(serverfix, "run_control", Mock(side_effect=[None, RuntimeError("invalid syntax")]))
-    with pytest.raises(RuntimeError, match="Configuration restored"):
-        serverfix.edit_site_config(config, "/bin/nginx")
-    assert config.read_text() == "original"
-
-
-def test_existing_invalid_config_does_not_open_editor(monkeypatch, tmp_path):
-    config = prepare(monkeypatch, tmp_path)
-    monkeypatch.setattr(serverfix, "run_control", Mock(side_effect=RuntimeError("existing error")))
-    with pytest.raises(RuntimeError, match="existing error"):
-        serverfix.edit_site_config(config, "/bin/nginx")
-    assert config.read_text() == "original"
-    assert list((tmp_path / "backups").iterdir()) == []
 
 
 @pytest.mark.parametrize("name,args", [("Nginx", ("-s", "reload")), ("Apache", ("-k", "graceful"))])
@@ -80,27 +34,6 @@ def test_run_control_skips_sudo_when_root(monkeypatch):
     monkeypatch.setattr(serverfix.subprocess, "run", run)
     serverfix.run_control("/usr/sbin/nginx", "-t")
     assert run.call_args.args[0] == ["/usr/sbin/nginx", "-t"]
-
-
-def test_editor_uses_sudo_when_config_not_writable(monkeypatch, tmp_path):
-    config = tmp_path / "site.conf"
-    config.write_text("original")
-    monkeypatch.setenv("EDITOR", "vim")
-    monkeypatch.delenv("VISUAL", raising=False)
-    monkeypatch.setattr(serverfix.os, "geteuid", lambda: 1000)
-    monkeypatch.setattr(serverfix.shutil, "which", lambda name: "/usr/bin/" + name)
-    monkeypatch.setattr(serverfix.os, "access", lambda path, mode: mode != os.W_OK)
-    monkeypatch.setattr(serverfix, "run_control", Mock(return_value=None))
-    monkeypatch.setattr(serverfix.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "backups"))
-    (tmp_path / "backups").mkdir()
-    edits = []
-
-    def fake_run(args, **kwargs):
-        edits.append(args)
-        return Mock(returncode=0)
-    monkeypatch.setattr(serverfix.subprocess, "run", fake_run)
-    serverfix.edit_site_config(config, "/usr/sbin/nginx")
-    assert edits and edits[0] == ["/usr/bin/sudo", "vim", str(config)]
 
 
 def test_write_bytes_uses_sudo_when_not_writable(monkeypatch, tmp_path):
@@ -254,10 +187,10 @@ def test_hosting_offers_correction_after_mime_failure(monkeypatch, action):
 def test_no_detected_server_does_not_offer_edit(monkeypatch):
     from termicast import prompts
     monkeypatch.setattr(serverfix, "detect_servers", lambda: {})
-    edit = Mock()
-    monkeypatch.setattr(serverfix, "edit_site_config", edit)
+    patch = Mock()
+    monkeypatch.setattr(serverfix, "apply_mime_patch", patch)
     prompts.correct_host_mime(Mock(), {})
-    edit.assert_not_called()
+    patch.assert_not_called()
 
 
 def test_hosting_menu_validates_s3_access_before_save(monkeypatch):

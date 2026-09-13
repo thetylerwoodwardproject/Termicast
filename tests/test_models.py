@@ -1,23 +1,17 @@
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from termicast.models import (
-    new_show, new_episode, validate_slug, slug_error, suggest_slug,
+    new_show, new_episode, slug_error, suggest_slug,
     chapters_relative, transcript_relative, chapter_filename,
 )
 
 
 def test_slug_validation():
-    assert validate_slug("s02ep042")
-    assert validate_slug("episode-42_notes")
-    assert validate_slug("a1")
-    assert not validate_slug("")
-    assert not validate_slug("-leading")
-    assert not validate_slug("_leading")
-    assert not validate_slug("has space")
-    assert not validate_slug("has/slash")
-    assert not validate_slug("..")
-    assert not validate_slug("s02ep042.mp3")
-    assert slug_error("../etc/passwd") is not None
+    for slug in ("s02ep042", "episode-42_notes", "a1"):
+        assert slug_error(slug) is None, slug
+    for slug in ("", "-leading", "_leading", "has space", "has/slash", "..",
+                 "s02ep042.mp3", "../etc/passwd"):
+        assert slug_error(slug) is not None, slug
 
 
 def test_suggest_slug_from_season_and_number():
