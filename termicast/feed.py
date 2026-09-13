@@ -302,6 +302,7 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
     first_item = next((i for i, child in enumerate(channel) if child.tag == "item"), len(channel))
     for index, item in enumerate(new_items):
         channel.insert(first_item + index, item)
+    etree.indent(root, space="  ")
     return etree.tostring(root, encoding="UTF-8", xml_declaration=True)
 
 

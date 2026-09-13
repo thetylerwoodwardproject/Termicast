@@ -60,6 +60,24 @@ def test_rendered_feed_validates():
     assert validate_feed(data) == []
 
 
+def test_render_feed_is_pretty_printed():
+    show = new_show(title="S", description="d", base_url="https://e.org/show", output_dir="/tmp/x")
+    episode = new_episode(
+        title="Ep", description="<p>desc</p>", guid="00000000-0000-0000-0000-000000000004",
+        mp3_url="https://e.org/show/audio/e1.mp3", length=1234, duration=60.0,
+        published_at="2024-01-01T00:00:00+00:00",
+        chapters=[{"startTime": 0, "title": "Opening"}],
+    )
+    data = render(show, [episode])
+    assert b"</generator><lastBuildDate>" not in data
+    assert b"><item>" not in data
+    assert b"</title><description>" not in data
+    assert b"\n    <item>" in data
+    assert b"\n      <title>Ep</title>" in data
+    assert b"<![CDATA[<p>desc</p>]]>" in data
+    assert validate_feed(data) == []
+
+
 def test_op3_prefixes_enclosure():
     show = new_show(title="S", description="d", base_url="https://e.org/show", output_dir="/tmp/x", op3=True)
     episode = new_episode(
