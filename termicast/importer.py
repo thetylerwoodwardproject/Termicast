@@ -1,5 +1,6 @@
 """Bounded, non-resolving RSS imports returning JSON-compatible profiles."""
 
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
@@ -35,15 +36,21 @@ def _uses_op3(root):
     return False
 
 
+def _text(node, name, default=""):
+    """Text of a child element, falling back when absent or empty."""
+    return node.findtext(_tag(name), default) or default
+
+
+def _attr(node, name, key):
+    """Attribute of a child element, or "" when either is absent."""
+    element = node.find(_tag(name))
+    return element.get(key, "") if element is not None else ""
+
+
 def _extract_show(root, source):
     channel = root.find("channel")
-
-    def text(name, default=""):
-        return channel.findtext(_tag(name), default=default) or default
-
-    def attr(name, key):
-        element = channel.find(_tag(name))
-        return element.get(key, "") if element is not None else ""
+    text = partial(_text, channel)
+    attr = partial(_attr, channel)
 
     feed_url = source
     for link in channel.findall(_tag("atom:link")):
@@ -134,12 +141,8 @@ def rewrite_urls(root, mapping):
 
 
 def extract_episode(item):
-    def text(name, default=""):
-        return item.findtext(_tag(name), default) or default
-
-    def attr(name, key):
-        element = item.find(_tag(name))
-        return element.get(key, "") if element is not None else ""
+    text = partial(_text, item)
+    attr = partial(_attr, item)
 
     url = attr("enclosure", "url")
     guid = text("guid") or str(uuid5(NAMESPACE_URL, url))
@@ -408,16 +411,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                     result = asset(url, folder)
                     if folder == "chapters":
                         payload = json.loads(local_paths[url].read_text())
-                        chapters = payload["chapters"]
-                        if not isinstance(chapters, list) or not chapters:
-                            raise ValueError("Chapter JSON requires a nonempty chapters array")
-                        if any(not isinstance(chapter, dict) or "startTime" not in chapter for chapter in chapters):
-                            raise ValueError("Each chapter must be an object with startTime")
-                        for index, chapter in enumerate(chapters):
-                            chapter.setdefault("endTime", chapters[index + 1]["startTime"] if index + 1 < len(chapters) else episode["duration"])
-                        errors = validation.validate_episode(dict(episode, chapters=chapters))
-                        if errors:
-                            raise ValueError("; ".join(errors))
+                        chapters = validation.validate_chapter_payload(payload, episode)
                         for chapter in chapters:
                             if chapter.get("img") and chapter["img"] not in mapping.values():
                                 chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
@@ -518,10 +512,10 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             for element in item.findall(_tag("podcast:chapters")):
                 url = element.get("url")
                 chapters = optional(url, "chapters", episode)
-                for index, chapter in enumerate(chapters):
+                validation.backfill_chapter_ends(chapters, episode["duration"])
+                for chapter in chapters:
                     if chapter.get("img") and chapter["img"] not in mapping.values():
                         chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
-                    chapter.setdefault("endTime", chapters[index + 1]["startTime"] if index + 1 < len(chapters) else episode["duration"])
                 episode["chapters"] = chapters
                 episode.setdefault("_replace_fields", []).append("chapters")
             for chapter in episode["chapters"]:

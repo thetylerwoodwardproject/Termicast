@@ -280,6 +280,35 @@ def validate_episode(episode) -> list[str]:
     return errors
 
 
+def backfill_chapter_ends(chapters, duration):
+    """Give each chapter an endTime: the next chapter's start, else `duration`."""
+    for index, chapter in enumerate(chapters):
+        chapter.setdefault("endTime", chapters[index + 1]["startTime"]
+                           if index + 1 < len(chapters) else duration)
+    return chapters
+
+
+def validate_chapter_payload(payload, episode):
+    """Return the chapters array of a chapter-JSON document, or raise.
+
+    The local-file reader and the importer's download path applied the same
+    four checks and the same endTime backfill in two places, with only the
+    missing-key behaviour differing.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("Chapter JSON must be an object")
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list) or not chapters:
+        raise ValueError("Chapter JSON requires a nonempty chapters array")
+    if any(not isinstance(chapter, dict) or "startTime" not in chapter for chapter in chapters):
+        raise ValueError("Each chapter must be an object with startTime")
+    backfill_chapter_ends(chapters, episode.get("duration"))
+    errors = validate_episode(dict(episode, chapters=chapters))
+    if errors:
+        raise ValueError("; ".join(errors))
+    return chapters
+
+
 class _HTTPSRedirectHandler(request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not validate_https(newurl):

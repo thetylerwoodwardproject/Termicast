@@ -666,6 +666,22 @@ def edit_menu(data, fields, episode=False):
             missing_media_metadata(data)
 
 
+def _prompt_and_write_s3_keys(cfg_path, incomplete_message):
+    """Ask for both keys, write ~/.s3cfg at mode 0600, and confirm.
+
+    Shared by the offer-when-missing and the replace-on-demand paths so the
+    credential write exists in exactly one place.
+    """
+    from .s3deploy import write_s3cfg
+    access_key = secret("Access key")
+    secret_key = secret("Secret key")
+    if not access_key or not secret_key:
+        warning(incomplete_message)
+        return
+    write_s3cfg(access_key, secret_key)
+    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+
+
 def _ensure_s3_credentials():
     """Offer to create ~/.s3cfg on the spot when no S3 credentials are found.
 
@@ -675,7 +691,7 @@ def _ensure_s3_credentials():
     exists but is missing/invalid keys, it's left alone rather than silently
     overwritten: it may hold other hand-edited settings (host_base, etc).
     """
-    from .s3deploy import s3_credentials_present, s3cfg_path, write_s3cfg
+    from .s3deploy import s3_credentials_present, s3cfg_path
     if s3_credentials_present():
         return
     cfg_path = s3cfg_path()
@@ -686,13 +702,7 @@ def _ensure_s3_credentials():
         return
     if not confirm(f"No S3 credentials found. Create {cfg_path} now?", True):
         return
-    access_key = secret("Access key")
-    secret_key = secret("Secret key")
-    if not access_key or not secret_key:
-        warning("Both keys are required; skipping ~/.s3cfg setup.")
-        return
-    write_s3cfg(access_key, secret_key)
-    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+    _prompt_and_write_s3_keys(cfg_path, "Both keys are required; skipping ~/.s3cfg setup.")
 
 
 def set_s3_credentials():
@@ -702,7 +712,7 @@ def set_s3_credentials():
     file after confirmation) so an account with an outdated or read-only key can
     update it without hand-editing ~/.s3cfg.
     """
-    from .s3deploy import s3_credentials_present, s3cfg_path, write_s3cfg
+    from .s3deploy import s3_credentials_present, s3cfg_path
     cfg_path = s3cfg_path()
     if s3_credentials_present():
         console.print(f"Existing S3 credentials found in {cfg_path}.", markup=False)
@@ -713,13 +723,7 @@ def set_s3_credentials():
                 "take precedence over ~/.s3cfg.")
     if cfg_path.exists() and not confirm(f"Replace {cfg_path} with the keys you enter now?", True):
         return
-    access_key = secret("Access key")
-    secret_key = secret("Secret key")
-    if not access_key or not secret_key:
-        warning("Both keys are required; ~/.s3cfg was not changed.")
-        return
-    write_s3cfg(access_key, secret_key)
-    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+    _prompt_and_write_s3_keys(cfg_path, "Both keys are required; ~/.s3cfg was not changed.")
 
 
 def hosting_form(data):
