@@ -263,6 +263,27 @@ def test_renamed_imported_audio_becomes_deployable(db, show, episode):
     assert "audio/ep001.mp3" in episode_asset_paths(renamed)
 
 
+def test_chapter_image_deployable_only_with_show(db, show):
+    """A chapter's img URL has no stored path field, so `show` recovers it.
+
+    Without `show`, an imported chapter image is invisible to deploy even
+    though `asset()` staged it locally during import -- exactly the bug where
+    imported chapter images never reach S3.
+    """
+    from termicast.publisher import episode_asset_paths
+    record = new_episode(
+        guid="ep-chapter-img", title="Has chapter art", description="d",
+        mp3_url=f"{BASE}/audio/e.mp3", length=5, duration=60.0,
+        chapters=[{"startTime": 0.0, "endTime": 60.0, "title": "Start",
+                   "img": f"{BASE}/images/chapters/c1.jpg"}],
+    )
+    assert "images/chapters/c1.jpg" not in episode_asset_paths(record)
+    assert "images/chapters/c1.jpg" in episode_asset_paths(record, show)
+    # An externally hosted chapter image isn't ours to upload.
+    foreign = dict(record, chapters=[{**record["chapters"][0], "img": "https://other.example.org/c1.jpg"}])
+    assert not any("c1.jpg" in path for path in episode_asset_paths(foreign, show))
+
+
 # --- editor wiring --------------------------------------------------------
 
 def test_rename_form_cancel_changes_nothing(db, show, episode, monkeypatch):

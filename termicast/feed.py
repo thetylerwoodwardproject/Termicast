@@ -1,8 +1,4 @@
-"""RSS generation with preservation of imported podcast metadata.
-
-Managed chapters are published as Podcasting 2.0 JSON only; PSC chapter import
-remains supported but PSC start markers are no longer generated.
-"""
+"""RSS generation with preservation of imported podcast metadata."""
 
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
@@ -25,6 +21,9 @@ NS = {
     "psc": "http://podlove.org/simple-chapters",
 }
 MAX_FEED_BYTES = 10 * 1024 * 1024
+
+# Elements whose text may contain HTML; written as CDATA rather than entity-escaped.
+CDATA_ELEMENTS = {"description", "content:encoded"}
 
 # OP3 analytics prefix; enclosure URLs are prefixed at render time only, so the
 # stored mp3_url stays the real rehosted URL for downloads and validation.
@@ -51,7 +50,7 @@ def _parse_xml(data):
     try:
         root = etree.fromstring(data, etree.XMLParser(
             resolve_entities=False, load_dtd=False, no_network=True,
-            remove_blank_text=False, recover=False,
+            remove_blank_text=False, recover=False, strip_cdata=False,
         ))
     except (etree.XMLSyntaxError, ValueError) as exc:
         raise ValueError(f"Invalid feed XML: {exc}") from exc
@@ -65,7 +64,7 @@ def _parse_xml(data):
 def _put(parent, name, text=None, **attrs):
     element = etree.SubElement(parent, _tag(name), **attrs)
     if text is not None:
-        element.text = str(text)
+        element.text = etree.CDATA(str(text)) if name in CDATA_ELEMENTS else str(text)
     return element
 
 
@@ -95,6 +94,14 @@ def _seconds(value):
 def enclosure_type(mp3_url):
     suffix = Path(urlsplit(mp3_url).path).suffix.lower()
     return ENCLOSURE_TYPES.get(suffix, "audio/mpeg")
+
+
+def _chapter_time(value):
+    milliseconds = round(float(_seconds(value)) * 1000)
+    hours, remainder = divmod(milliseconds, 3600000)
+    minutes, remainder = divmod(remainder, 60000)
+    seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}"
 
 
 def render_feed(show: dict, template: bytes | None, episodes: list[dict],
@@ -246,6 +253,10 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
         if episode.get("chapters"):
             _put(item, "podcast:chapters", url=asset_base(show) + "/" + chapters_relative(episode),
                  type="application/json+chapters")
+            chapters = _put(item, "psc:chapters", version="1.2")
+            for chapter in episode["chapters"]:
+                _put(chapters, "psc:chapter", start=_chapter_time(chapter["startTime"]), title=chapter["title"],
+                     **{target: chapter[key] for key, target in (("img", "image"), ("url", "href")) if chapter.get(key)})
         if guid in originals:
             from .importer import extract_episode
             original_item = originals[guid]

@@ -95,6 +95,30 @@ def test_s3_publish_uploads_assets_not_feed(db, show, monkeypatch):
     assert not audio.exists()
 
 
+def test_s3_publish_uploads_chapter_images(db, show, monkeypatch):
+    """A chapter image staged under the show's own asset base must be uploaded too.
+
+    Regression test: chapter "img" URLs used to be dropped from the deploy set
+    entirely, so chapters.json referenced images that were never pushed to S3.
+    """
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show", enabled=True)
+    db.save_show(show)
+    image = Path(show["output_dir"]) / "images" / "chapters" / "c1.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"image-data")
+    uploaded = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: uploaded.append(list(paths)) or list(paths))
+    episode = make_episode(chapters=[
+        {"startTime": 0, "endTime": 60, "title": "Opening",
+         "img": "https://cdn.example.org/show/images/chapters/c1.jpg"},
+    ])
+    Publisher(db).publish(show["id"], episode)
+    assert uploaded, "deploy_paths should have been called"
+    assert "images/chapters/c1.jpg" in uploaded[0]
+
+
 def test_s3_keep_local_media_retains_working_copy(db, show, monkeypatch):
     show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
                 enabled=True, keep_local_media=True)

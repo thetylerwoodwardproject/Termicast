@@ -15,7 +15,7 @@ from .database import filesystem_lock
 from .feed import render_feed
 from .validation import validate_episode
 from .models import chapters_relative, transcript_relative
-from .storage import asset_root, asset_base
+from .storage import asset_root, asset_base, local_relative
 
 
 def fsync_dir(path):
@@ -53,8 +53,14 @@ def output_lock(show):
     return filesystem_lock(Path(show["output_dir"]) / ".termicast.lock")
 
 
-def episode_asset_paths(episode):
-    """Relative managed asset paths that must exist for this episode."""
+def episode_asset_paths(episode, show=None):
+    """Relative managed asset paths that must exist for this episode.
+
+    `show` is needed to recover chapter image paths: unlike audio_path/
+    image_path, chapters carry no stored relative path, only the public URL
+    (`img`) shipped as-is inside chapters.json. Without `show`, per-chapter
+    images are skipped.
+    """
     paths = set()
     if episode.get("audio_path"):
         paths.add(episode["audio_path"])
@@ -64,6 +70,11 @@ def episode_asset_paths(episode):
         paths.add(episode["transcript_path"])
     if episode.get("chapters"):
         paths.add(chapters_relative(episode))
+        if show is not None:
+            for chapter in episode["chapters"]:
+                relative = local_relative(show, chapter.get("img"))
+                if relative:
+                    paths.add(str(relative))
     if episode.get("_transcript_vtt"):
         paths.add(transcript_relative(episode))
     return paths
@@ -228,7 +239,7 @@ class Publisher:
                 episodes = [e for e in self.db.list_episodes(show_id) if e["status"] == "published"]
             assets = set()
             for episode in episodes:
-                assets |= episode_asset_paths(episode)
+                assets |= episode_asset_paths(episode, show)
             if show.get("hosting") == "s3":
                 if show.get("mirror_feed") and not (asset_root(show) / "feed.xml").is_file():
                     raise ValueError("No local feed.xml to deploy; publish or regenerate first")
@@ -320,7 +331,7 @@ class Publisher:
     def _deploy_remote(self, snapshot, show):
         paths = set()
         for episode in snapshot["episodes"]:
-            paths |= episode_asset_paths(episode)
+            paths |= episode_asset_paths(episode, show)
         try:
             from .s3deploy import check_s3_access
             root = asset_root(show)

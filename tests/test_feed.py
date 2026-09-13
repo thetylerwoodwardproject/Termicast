@@ -17,7 +17,7 @@ def test_enclosure_type():
     assert enclosure_type("https://e.org/audio/x.weird") == "audio/mpeg"
 
 
-def test_slug_chapters_and_no_psc():
+def test_slug_chapters_and_psc():
     show = new_show(title="S", description="d", base_url="https://e.org/show", output_dir="/tmp/x")
     episode = new_episode(
         title="Ep", description="desc", guid="00000000-0000-0000-0000-000000000001",
@@ -30,7 +30,11 @@ def test_slug_chapters_and_no_psc():
     chapters = root.find(f"channel/item/{_tag('podcast:chapters')}", NS)
     assert chapters.get("url") == "https://e.org/show/chapters/s02ep042.json"
     assert chapters.get("type") == "application/json+chapters"
-    assert root.find(f"channel/item/{_tag('psc:chapters')}", NS) is None
+    psc = root.find(f"channel/item/{_tag('psc:chapters')}", NS)
+    assert psc.get("version") == "1.2"
+    chapter = psc.find(_tag("psc:chapter"), NS)
+    assert chapter.get("start") == "00:00:00.000"
+    assert chapter.get("title") == "Opening"
 
 
 def test_enclosure_type_reflects_format():
