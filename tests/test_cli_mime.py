@@ -5,6 +5,12 @@ import pytest
 from termicast import cli, prompts, publisher as publisher_module
 
 
+def test_webp_content_type_is_stageable():
+    from termicast.media import content_type_for, STAGEABLE_SUFFIXES
+    assert ".webp" in STAGEABLE_SUFFIXES
+    assert content_type_for("images/cover.webp") == "image/webp"
+
+
 @pytest.mark.parametrize("interactive,accept", [(True, True), (True, False), (False, False)])
 def test_deploy_mime_failure_offers_repair_only_in_terminal(monkeypatch, interactive, accept):
     db = Mock()

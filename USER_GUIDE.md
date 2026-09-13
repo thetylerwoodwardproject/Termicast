@@ -176,7 +176,7 @@ Audio file path (mp3, wav, flac, m4a, ogg, opus):
 
 Then it asks (optional):
 
-- **Cover artwork** — a JPEG or PNG image for the episode.
+- **Cover artwork** — a JPEG, PNG, or WebP image for the episode.
 - **Transcript** — a `.vtt` or `.srt` subtitles file, if you have one.
   SubRip is converted to WebVTT for the managed copy.
 
@@ -187,7 +187,7 @@ accept it or type your own.
 Termicast then **prepares your files automatically**:
 
 - Audio is converted to a clean MP3 (128 kbps by default).
-- Artwork is optimized to a small JPEG.
+- Artwork is optimized to a small JPEG, including PNG and WebP sources.
 - Everything is named and placed in the right folders.
 
 You'll see a summary of the results, then you enter the **title** and
@@ -204,6 +204,21 @@ You'll see a summary of the results, then you enter the **title** and
 - **2. Publish now** — makes the episode live immediately.
 - **3. Schedule** — choose a future date and time to release it.
 - **5. Add chapters / transcript** — add chapter markers or a transcript.
+
+Choose **Chapters manually** and enter a **start time and title** for each chapter.
+You can add chapters in any order: the list sorts itself and shows each chapter
+running until the next starts, or until the episode ends for the last chapter.
+Duplicate starts are rejected. There is no stop prompt because neither Podlove
+Simple Chapters nor Podcasting 2.0 JSON Chapters requires an end time. Imported
+JSON can still carry explicit ends to preserve gaps; editing a chapter removes
+its old end time.
+
+Optional chapter artwork can be an HTTPS URL or a local JPEG/PNG/WebP file path.
+Local files are converted to JPEG under `images/chapters/` and linked automatically.
+In show or episode artwork settings, you can also enter a local path or HTTPS URL.
+For remote artwork that needs conversion, accept the offer to download, convert,
+and host it. Show and episode images installed this way are padded/enlarged to
+3000×3000; chapter images can keep their original proportions.
 
 That's the whole episode flow.
 
@@ -259,14 +274,14 @@ If your current feed uses OP3 metrics (enclosure URLs prefixed with
 automatically. You can turn it off later under **Edit field** in the settings
 review.
 
-If JPEG or PNG artwork needs RGB conversion or resizing, Termicast shows its format, color
+If JPEG, PNG, or WebP artwork needs conversion or resizing, Termicast shows its format, color
 mode, and dimensions. Choose **Convert this image**, **Automatically convert
 remaining artwork in this import**, or **Cancel import**. Auto mode lasts only
 for the current import and covers both color conversion and resizing. Transparency
 is flattened onto white. Episode images with incorrect dimensions and show images
 outside the required square 1400–3000 pixel range are resized to 3000×3000.
 Proportions are preserved, with white padding for non-square images; smaller
-images are enlarged. PNG artwork is always re-encoded to a smaller JPEG
+images are enlarged. PNG and WebP artwork are always re-encoded to JPEG
 (quality 90, optimized); JPEG artwork keeps its format unless it needs resizing.
 This also works for archive imports and converts only the staged copy.
 

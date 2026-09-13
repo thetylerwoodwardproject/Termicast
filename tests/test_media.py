@@ -74,7 +74,7 @@ def test_enclosure_types():
     assert ENCLOSURE_TYPES[".mp3"] == "audio/mpeg"
     assert ENCLOSURE_TYPES[".flac"] == "audio/flac"
     assert set(AUDIO_EXTENSIONS) >= {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"}
-    assert set(IMAGE_EXTENSIONS) == {".jpg", ".jpeg", ".png"}
+    assert set(IMAGE_EXTENSIONS) == {".jpg", ".jpeg", ".png", ".webp"}
     assert TRANSCRIPT_EXTENSIONS == {".vtt", ".srt"}
 
 
@@ -156,3 +156,62 @@ def test_prepared_review_reports_how_media_was_handled(tmp_path):
     review = prepared.review()
     assert review["audio_handling"] == "converted to MP3 128 kbps / 44100 Hz"
     assert review["image_handling"] == "kept original artwork"
+
+
+def test_webp_identification_and_conversion(tmp_path):
+    from PIL import Image
+    from termicast.validation import inspect_local_artwork
+    source = tmp_path / "art.WEBP"
+    Image.new("RGBA", (1400, 1400), (255, 0, 0, 0)).save(source)
+    assert identify_files(["e.mp3", source])["image"] == str(source)
+    dest, relative, _, _, dims, note = _prepare_image(source, tmp_path / "out", "ep001", "compact", False)
+    assert relative == "images/ep001.jpg"
+    assert dims == (1400, 1400)
+    assert "WEBP to JPEG" in note
+    assert inspect_local_artwork(dest) == []
+    with Image.open(dest) as image:
+        assert image.getpixel((0, 0)) == (255, 255, 255)
+    with pytest.raises(ValueError, match="Drop --keep-image"):
+        _prepare_image(source, tmp_path / "out", "ep002", "compact", True)
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("kind", ["show", "episode", "chapter"])
+def test_install_artwork(tmp_path, monkeypatch, remote, kind):
+    from PIL import Image
+    from termicast import validation
+    from termicast.media import install_artwork
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show",
+                    hosting="s3", asset_base_url="https://cdn.e.org/show")
+    source = tmp_path / "wide.webp"
+    Image.new("RGB", (800, 400), (255, 0, 0)).save(source)
+    original = source.read_bytes()
+    downloads = []
+
+    def download(url, handle, limit):
+        downloads.append((url, limit))
+        handle.write(original)
+
+    monkeypatch.setattr(validation, "_download", download)
+    url = "https://source.e.org/wide.webp"
+    folder = "images/chapters" if kind == "chapter" else "images"
+    relative, public = install_artwork(show, url if remote else source, stem="ep001", folder=folder, kind=kind)
+    assert relative == f"{folder}/ep001.jpg"
+    assert public == f"https://cdn.e.org/show/{relative}"
+    assert downloads == ([(url, validation.MAX_ARTWORK_BYTES)] if remote else [])
+    dest = tmp_path / "out" / relative
+    assert validation.inspect_local_artwork(dest, episode=kind == "episode", chapter=kind == "chapter") == []
+    with Image.open(dest) as image:
+        assert image.size == ((800, 400) if kind == "chapter" else (3000, 3000))
+        if kind != "chapter":
+            assert all(c >= 220 for c in image.getpixel((1500, 0)))
+    assert source.read_bytes() == original
+
+
+def test_install_artwork_pads_small_jpeg_instead_of_fast_copy(tmp_path):
+    from termicast.media import install_artwork
+    from termicast.validation import inspect_local_artwork
+    show = new_show(output_dir=str(tmp_path / "out"), base_url="https://e.org/show")
+    source = make_jpg(tmp_path / "small.jpg")
+    relative, _ = install_artwork(show, source, stem="cover", kind="episode")
+    assert inspect_local_artwork(tmp_path / "out" / relative, episode=True) == []

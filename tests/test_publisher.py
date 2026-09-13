@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,22 @@ def test_publish_local_writes_feed_and_chapters(db, show):
     assert (Path(show["output_dir"]) / "chapters" / "s01e001.json").is_file()
     saved = db.list_episodes(show["id"])
     assert saved[0]["status"] == "published"
+
+
+@pytest.mark.parametrize("explicit_end", [False, True])
+def test_published_chapters_preserve_only_supplied_ends(db, show, explicit_end):
+    chapters = [{"startTime": 0, "title": "Opening"}, {"startTime": 30, "title": "Main"}]
+    if explicit_end:
+        chapters[0]["endTime"] = 20
+    Publisher(db).publish(show["id"], make_episode(chapters=chapters))
+    payload = json.loads((Path(show["output_dir"]) / "chapters/s01e001.json").read_text())
+    assert payload["chapters"] == chapters
+    assert db.list_episodes(show["id"])[0]["chapters"] == chapters
+    root = etree.parse(str(Path(show["output_dir"]) / "feed.xml"))
+    from termicast.feed import NS
+    emitted = root.findall("channel/item/psc:chapters/psc:chapter", NS)
+    assert len(emitted) == 2
+    assert all(set(chapter.attrib) == {"start", "title"} for chapter in emitted)
 
 
 def test_scheduled_episode_absent_from_feed(db, show):

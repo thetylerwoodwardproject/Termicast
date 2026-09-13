@@ -30,6 +30,17 @@ def test_extract_episodes_preserves_guid_and_metadata():
     assert episode["duration"] == 3723.0
 
 
+def test_rss_chapters_have_no_fabricated_ends():
+    root = etree.fromstring(FIXTURE.read_bytes())
+    item = root.find("channel/item")
+    chapters = etree.SubElement(item, f"{{{NS['psc']}}}chapters")
+    etree.SubElement(chapters, f"{{{NS['psc']}}}chapter", start="00:00:00", title="Opening")
+    item.remove(item.find("itunes:duration", NS))
+    episode = extract_episodes(etree.tostring(root))[0]
+    assert episode["duration"] == 0
+    assert episode["chapters"] == [{"startTime": 0, "title": "Opening"}]
+
+
 def test_render_preserves_unknown_xml():
     settings, template = import_feed(str(FIXTURE))
     show = new_show(**settings)
@@ -124,6 +135,22 @@ def test_rgb_jpeg_artwork_is_preserved(tmp_path):
     result = _convert_import_artwork(path, "image.jpg", lambda *args: pytest.fail("Unexpected prompt"))
     assert result == path
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("kind", ["show", "episode", "chapter"])
+def test_import_webp_artwork(tmp_path, kind):
+    from termicast.importer import _convert_import_artwork
+    from termicast.validation import inspect_local_artwork
+    path = tmp_path / "wide.webp"
+    Image.new("RGBA", (800, 400), (255, 0, 0, 128)).save(path)
+    approvals = []
+    converted = _convert_import_artwork(
+        path, "https://e.org/wide.webp",
+        lambda *args, **kwargs: approvals.append((args, kwargs)) or True, kind=kind)
+    assert converted == path.with_suffix(".jpg")
+    assert not path.exists()
+    assert approvals[0][0][1] == "WEBP"
+    assert inspect_local_artwork(converted, episode=kind == "episode", chapter=kind == "chapter") == []
 
 
 def test_converted_artwork_still_requires_valid_dimensions(tmp_path):

@@ -146,9 +146,26 @@ the same flow.
 
 Mono/stereo are preserved; multichannel audio is rejected. Suitable MP3s at or
 below the target bitrate are passed through, never uprated. Already-small JPEGs
-are preserved; transparency is flattened onto white; oversize square covers are
+are preserved; PNG and WebP are converted to JPEG; transparency is flattened onto white; oversize square covers are
 reduced to 3000x3000. Per-episode overrides: `--audio-preset`, `--image-preset`,
 `--keep-audio`, `--keep-image`.
+
+Artwork settings accept a local JPEG/PNG/WebP path or an HTTPS URL. If remote
+artwork needs conversion, Termicast offers to download it, convert it to RGB JPEG,
+and host it in the show's `images/` folder. Show and episode artwork installed
+through settings is padded/enlarged to 3000×3000. WebP cannot use `--keep-image`.
+
+### Chapters
+
+Choose **Add chapters / transcript → Chapters manually** and enter a start time
+and title for each chapter, in any order. The list sorts automatically; duplicate
+starts are rejected. Each chapter runs until the next starts, and the last runs
+until the episode ends. Neither Podlove Simple Chapters nor Podcasting 2.0 JSON
+Chapters requires an end time, so Termicast does not generate one. Explicit ends
+from imported chapter JSON are preserved until that chapter is edited.
+
+Chapter artwork accepts an HTTPS URL or a local JPEG/PNG/WebP path. Local artwork
+is converted to a hosted JPEG; chapter images do not need to be square.
 
 ### 🔖 Slugs and files
 
@@ -165,8 +182,8 @@ Extensions follow the actual output format. Slugs use ASCII letters, numbers,
 hyphens, and underscores, and must begin with a letter or number. Collisions
 with other episodes are rejected before install.
 
-Per-chapter images follow the same scheme, indexed by their chapter's position
-in the episode:
+Per-chapter images follow the same scheme, using the first available image index
+when added (renaming an episode re-indexes them by chapter position):
 
 ```text
 images/chapters/s02ep042-01.jpg

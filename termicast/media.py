@@ -14,13 +14,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 from urllib.parse import urlsplit
 
-from .storage import asset_root
+from .storage import asset_root, asset_url
 
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus"}
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 TRANSCRIPT_EXTENSIONS = {".vtt", ".srt"}
 
 # RSS-deliverable enclosure formats used by keep-audio and feed generation.
@@ -50,7 +51,7 @@ MAX_IMAGE_EDGE = 3000
 _OTHER_TYPES = {
     ".vtt": "text/vtt",
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".png": "image/png", ".json": "application/json",
+    ".png": "image/png", ".webp": "image/webp", ".json": "application/json",
     ".srt": "application/x-subrip", ".txt": "text/plain",
     ".html": "text/html", ".pdf": "application/pdf",
 }
@@ -166,7 +167,7 @@ def identify_files(paths):
         elif suffix in TRANSCRIPT_EXTENSIONS:
             roles["transcript"].append(str(path))
         else:
-            raise ValueError(f"Unsupported file type for {path}: expected audio, image, or a .vtt/.srt transcript")
+            raise ValueError(f"Unsupported file type for {path}: expected audio, JPEG/PNG/WebP image, or a .vtt/.srt transcript")
     if not roles["audio"]:
         raise ValueError("Audio is required for a new episode")
     if len(roles["audio"]) > 1:
@@ -336,7 +337,7 @@ def _needs_orientation(source):
         return True
 
 
-def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
+def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None, pad_to=None):
     from PIL import Image, ImageOps
     from .publisher import atomic_write
     source = Path(source)
@@ -348,13 +349,15 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
     with Image.open(source) as image:
         fmt = image.format
         size = image.size
+        mode = image.mode
         # verify() must be the first call after open(), so the orientation
         # tag cannot be read here -- _needs_orientation() reopens for it.
         image.verify()
 
     if keep:
         if fmt not in ("JPEG", "PNG"):
-            raise ValueError("Keep image requires JPEG or PNG artwork")
+            raise ValueError(f"{fmt} cannot be kept as podcast artwork; keep image requires JPEG or PNG. "
+                             "Drop --keep-image to convert it to JPEG.")
         ext = ".jpg" if suffix in (".jpg", ".jpeg") else ".png"
         dest = dest_dir / (slug + ext)
         temp = dest_dir / f".{dest.name}.tmp-{os.getpid()}"
@@ -368,6 +371,7 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
     preset = IMAGE_PRESETS[preset_name]
     target = preset["target_bytes"]
     fast_path = (fmt == "JPEG" and suffix in (".jpg", ".jpeg")
+                 and mode == "RGB" and (pad_to is None or size == pad_to)
                  and before <= target and not _needs_orientation(source)
                  and max(size) <= MAX_IMAGE_EDGE)
     if fast_path:
@@ -390,7 +394,12 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
         else:
             image = image.convert("RGB")
             flattened = False
-        if width == height and width > MAX_IMAGE_EDGE:
+        if pad_to is not None and image.size != pad_to:
+            image = ImageOps.pad(image, pad_to, method=Image.Resampling.LANCZOS,
+                                 color=(255, 255, 255))
+            width, height = image.size
+            resized = True
+        elif width == height and width > MAX_IMAGE_EDGE:
             image = image.resize((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE), Image.LANCZOS)
             width = height = MAX_IMAGE_EDGE
             resized = True
@@ -406,6 +415,8 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
     dest = dest_dir / (slug + ".jpg")
     atomic_write(dest, final)
     notes = []
+    if fmt != "JPEG":
+        notes.append(f"converted {fmt} to JPEG")
     if flattened:
         notes.append("transparency flattened onto white")
     if resized:
@@ -414,6 +425,30 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
         notes.append(f"optimized JPEG (target below {target} bytes)")
     note = "; ".join(notes)
     return dest, f"images/{dest.name}", before, dest.stat().st_size, (width, height), note
+
+
+def install_artwork(show, source, *, stem, folder="images", kind=""):
+    """Convert a local or bounded HTTPS source to managed JPEG artwork."""
+    from . import validation
+    from .models import slug_error
+    if slug_error(stem) or folder not in ("images", "images/chapters", "images/episodes"):
+        raise ValueError("Artwork requires a safe filename and managed image folder")
+    if not show.get("output_dir") or not validation.validate_https(asset_url(show, "")):
+        raise ValueError("Set the show's output directory and public HTTPS URL before installing artwork")
+    preset = show.get("image_preset", "compact")
+    if preset not in IMAGE_PRESETS:
+        raise ValueError("image_preset must be compact or detail")
+    pad_to = (3000, 3000) if kind in ("show", "episode") else None
+    with tempfile.TemporaryDirectory() as temporary:
+        if "://" in str(source):
+            path = Path(temporary) / "artwork"
+            with path.open("wb") as handle:
+                validation._download(str(source), handle, validation.MAX_ARTWORK_BYTES)
+        else:
+            path = Path(source).expanduser()
+        _prepare_image(path, asset_root(show) / folder, stem, preset, False, pad_to=pad_to)
+    relative = f"{folder}/{stem}.jpg"
+    return relative, asset_url(show, relative)
 
 
 def _prepare_transcript(source, dest_dir, slug, update=None):

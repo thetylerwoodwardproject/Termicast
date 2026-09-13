@@ -171,14 +171,16 @@ def transcript_relative(episode) -> str:
     return "transcripts/" + chapter_filename(episode["guid"]) + TRANSCRIPT_EXT
 
 
-def chapter_image_relative(slug, index, suffix) -> str:
+def chapter_image_relative(slug, index, suffix, *, guid=None) -> str:
     """Relative path for a chapter image following the episode's slug.
 
     `index` is the chapter's one-based position in the episode, `suffix` the
     original file suffix (including the dot). Kept under `images/chapters/` so
     it stays inside the managed folders while sharing the episode's slug.
+    Without a slug, supply `guid` to use the managed chapter JSON's safe stem.
     """
-    return f"images/chapters/{slug}-{int(index):02d}{suffix}"
+    stem = slug or chapter_filename(guid).removesuffix(CHAPTER_EXT)
+    return f"images/chapters/{stem}-{int(index):02d}{suffix}"
 
 
 def new_show(**kwargs) -> dict:

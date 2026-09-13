@@ -194,8 +194,16 @@ linked as `application/json+chapters`. Managed transcripts are WebVTT files in
 cues missing the `WEBVTT` header. A transcript linked by an imported feed keeps
 its own format and is linked with the type that matches it -- `text/vtt`,
 `application/x-subrip` for SubRip, `text/plain`, `text/html`, or
-`application/json`. Enter chronological, nonoverlapping ranges within the
-episode duration. Chapter titles allow 255 characters; soundbite titles allow 128.
+`application/json`.
+
+Enter a start time and title per chapter, in any order; the list sorts automatically
+and rejects duplicate starts. Each chapter runs until the next starts, and the last
+until the episode ends. Neither Podlove Simple Chapters nor Podcasting 2.0 JSON
+Chapters requires an end time, so Termicast does not generate one. Explicit imported
+ends are preserved until you edit that chapter. Chapter artwork accepts an HTTPS
+URL or a local JPEG/PNG/WebP path; local files are converted to hosted JPEGs.
+Chapter titles allow 255 characters; soundbites still use start/stop ranges and
+their titles allow 128.
 
 ## What does validate check, and what are its limits?
 
