@@ -120,10 +120,25 @@ def object_key(show, relative):
     return f"{prefix}/{relative}" if prefix else relative
 
 
-def s4cmd_args(show, content_type):
-    args = [s4cmd_path(), "put"]
+def _s4cmd_base(show, verb):
+    """Executable, verb, and the endpoint override every invocation needs.
+
+    Five call sites repeated this; a show pointed at a non-AWS endpoint
+    silently fell back to AWS wherever one of them was missed.
+    """
+    args = [s4cmd_path(), verb]
     if show.get("endpoint_url"):
         args += ["--endpoint-url", show["endpoint_url"]]
+    return args
+
+
+def _failure(process):
+    """s4cmd reports failures on either stream depending on the verb."""
+    return process.stderr.strip() or process.stdout.strip()
+
+
+def s4cmd_args(show, content_type):
+    args = _s4cmd_base(show, "put")
     args += ["--num-threads", str(NUM_THREADS),
              "--multipart-split-size", str(MULTIPART_SPLIT),
              "--max-singlepart-upload-size", str(SINGLEPART_LIMIT),
@@ -151,7 +166,7 @@ def upload_file(show, local_path, remote_relative, dry_run=False, timeout=None):
         str(local_path), f"s3://{show['bucket']}/{object_key(show, remote_relative)}"]
     process = _run(args, timeout=timeout)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"s4cmd upload failed for {remote_relative}: {message}"
             f"{_permission_help(show, message)}") from None
@@ -208,7 +223,7 @@ def upload_batch(show, root, relatives, content_type, dry_run=False, timeout=Non
     args = s4cmd_args(show, content_type) + [str(root / relative) for relative in relatives] + [target]
     process = _run(args, timeout=timeout)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"s4cmd upload failed for {len(relatives)} file(s) under {folder}: {message}"
             f"{_permission_help(show, message)}") from None
@@ -277,17 +292,14 @@ def remote_rename(show, old_relative, new_relative):
     copy of media'): the bytes never leave S3, so nothing needs downloading
     and re-uploading. Metadata, including Content-Type, is preserved by s4cmd.
     """
-    args = [s4cmd_path(), "mv"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args += ["--force",
+    args = _s4cmd_base(show, "mv") + ["--force",
              f"s3://{show['bucket']}/{object_key(show, old_relative)}",
              f"s3://{show['bucket']}/{object_key(show, new_relative)}"]
     process = _run(args)
     if process.returncode != 0:
         raise RuntimeError(
             f"s4cmd rename failed for {old_relative} -> {new_relative}: "
-            f"{process.stderr.strip() or process.stdout.strip()}") from None
+            f"{_failure(process)}") from None
 
 
 WRITE_PROBE_PREFIX = ".termicast-write-check-"
@@ -296,10 +308,7 @@ WRITE_PROBE_PREFIX = ".termicast-write-check-"
 def _list_destination(show):
     """Return the raw `s4cmd ls` result for the show's bucket/prefix."""
     key = object_key(show, "")
-    args = [s4cmd_path(), "ls"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(f"s3://{show['bucket']}/{key}")
+    args = _s4cmd_base(show, "ls") + [f"s3://{show['bucket']}/{key}"]
     try:
         return _run(args, timeout=S3_CMD_TIMEOUT)
     except FileNotFoundError:
@@ -315,7 +324,7 @@ def _ensure_empty_destination(show):
     """
     process = _list_destination(show)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"Could not list the S3 destination to confirm it is empty: {message}"
             f"{_permission_help(show, message)}") from None
@@ -326,15 +335,11 @@ def _ensure_empty_destination(show):
 def _delete_probe(show, probe_relative):
     """Remove the exact probe object created by this invocation, if any."""
     remote = f"s3://{show['bucket']}/{object_key(show, probe_relative)}"
-    args = [s4cmd_path(), "del"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(remote)
-    process = _run(args, timeout=S3_CMD_TIMEOUT)
+    process = _run(_s4cmd_base(show, "del") + [remote], timeout=S3_CMD_TIMEOUT)
     if process.returncode != 0:
         raise RuntimeError(
             f"Uploaded a write-access probe object but could not remove it ({remote}); "
-            f"delete it manually: {process.stderr.strip() or process.stdout.strip()}")
+            f"delete it manually: {_failure(process)}")
 
 
 def _check_write_access(show):
@@ -401,7 +406,7 @@ def delete_prefix(show, dry_run=False, allow_empty_prefix=False):
     check_s3_access(show)
     process = _list_destination(show)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"Could not list the S3 destination to delete it: {message}"
             f"{_permission_help(show, message)}") from None
@@ -409,13 +414,9 @@ def delete_prefix(show, dry_run=False, allow_empty_prefix=False):
     if count == 0 or dry_run:
         return count
     remote = f"s3://{show['bucket']}/{object_key(show, '')}"
-    args = [s4cmd_path(), "del", "--recursive"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(remote)
-    process = _run(args)
+    process = _run(_s4cmd_base(show, "del") + ["--recursive", remote])
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"s4cmd delete failed for {remote}: {message}"
             f"{_permission_help(show, message)}") from None

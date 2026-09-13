@@ -15,11 +15,10 @@ from pathlib import Path
 from .models import (ASSET_ROLES, chapter_image_relative, chapters_relative,
                      slug_error, transcript_relative)
 from .publisher import fsync_dir, operation_lock, output_lock
-from .storage import asset_base, asset_root, local_relative
+from .storage import MANAGED_FOLDERS, asset_base, asset_root, local_relative
 from .validation import validate_episode
 
 # The managed asset folders, matching the set repair.scan_show enforces.
-MANAGED_FOLDERS = ("audio", "chapters", "images", "transcripts")
 
 
 class RenamePlan:
@@ -242,9 +241,7 @@ def rename_episode(db, show, episode, plan):
         raise ValueError("; ".join(errors))
     assets = asset_root(show)
     with operation_lock(show), db.lock():
-        current = db.get_show(show["id"])
-        if current is None:
-            raise ValueError("Unknown podcast ID")
+        current = db.require_show(show["id"])
         live = {e["guid"]: e for e in db.list_episodes(show["id"])}
         if live.get(episode["guid"]) != episode:
             raise ValueError("Episode changed since the rename was planned; reopen it")

@@ -24,9 +24,7 @@ def export_csv(db, show_id, path, selection="all"):
     if selection not in ("all", "published", "scheduled"):
         raise ValueError("Filter must be all, published, or scheduled")
     with db.lock():
-        show = db.get_show(show_id)
-        if show is None:
-            raise ValueError("Unknown podcast ID")
+        show = db.require_show(show_id)
         episodes = db.list_episodes(show_id)
         shows = db.list_shows()
     target = Path(path).expanduser().resolve()

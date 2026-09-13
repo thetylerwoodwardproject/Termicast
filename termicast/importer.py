@@ -13,6 +13,7 @@ import shutil
 import tempfile
 
 from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
+from .media import STAGEABLE_SUFFIXES, default_suffix
 from .models import (ASSET_ROLES, chapters_relative, new_episode, plan_slugs,
                      transcript_relative)
 from .publisher import atomic_write, fsync_dir
@@ -375,8 +376,8 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 raise ValueError(f"Archive is missing a staged asset for {url}")
             else:
                 suffix = Path(urlsplit(url).path).suffix.lower()
-                if suffix not in (".mp3", ".jpg", ".jpeg", ".png", ".json", ".vtt", ".srt", ".txt", ".html", ".pdf"):
-                    suffix = {"audio": ".mp3", "chapters": ".json", "transcripts": ".vtt"}.get(folder, ".img")
+                if suffix not in STAGEABLE_SUFFIXES:
+                    suffix = default_suffix(folder)
                 relative = folder + "/" + hashlib.sha256(url.encode()).hexdigest() + suffix
                 path = stage / relative
                 try:

@@ -150,8 +150,7 @@ class Publisher:
         episode = dict(episode, published_at=target)
         due = when is None or datetime.fromisoformat(target) <= now
         with self.db.lock():
-            if self.db.get_show(show_id) is None:
-                raise ValueError("Unknown podcast ID")
+            self.db.require_show(show_id)
             with self.db.connection() as conn:
                 existing = conn.execute("SELECT * FROM episodes WHERE show_id=? AND guid = ?", (show_id, episode["guid"])).fetchone()
                 if existing:
@@ -177,9 +176,7 @@ class Publisher:
         """
         now = datetime.now(timezone.utc)
         with self.db.lock():
-            show = self.db.get_show(show_id)
-            if show is None:
-                raise ValueError("Unknown podcast ID")
+            show = self.db.require_show(show_id)
             existing = {e["guid"]: e for e in self.db.list_episodes(show_id)}
             if callable(episodes):
                 episodes = episodes(existing, show)
@@ -253,9 +250,7 @@ class Publisher:
         show's `mirror_feed` setting is on, a copy is additionally uploaded to
         the bucket after the media assets succeed.
         """
-        show = self.db.get_show(show_id)
-        if show is None:
-            raise ValueError("Unknown podcast ID")
+        show = self.db.require_show(show_id)
         asset_root(show).mkdir(parents=True, exist_ok=True)
         with operation_lock(show):
             with self.db.lock():
@@ -312,9 +307,7 @@ class Publisher:
 
     def _write(self, show_id, now, include_due, release_guids=()):
         with self.db.lock():
-            show = self.db.get_show(show_id)
-            if show is None:
-                raise ValueError("Unknown podcast ID")
+            show = self.db.require_show(show_id)
         asset_root(show).mkdir(parents=True, exist_ok=True)
         with operation_lock(show):
             with self.db.lock():

@@ -14,6 +14,13 @@ from urllib.parse import unquote, urlsplit
 from .validation import validate_https
 
 
+# Top-level folders Termicast creates and owns inside a show's output
+# directory. Lives here rather than in rename.py because storage is the
+# lower layer: rename imports storage, so the reverse needed a
+# function-scope import to dodge the cycle.
+MANAGED_FOLDERS = ("audio", "chapters", "images", "transcripts")
+
+
 def asset_root(show):
     return Path(show["output_dir"]).expanduser().absolute()
 
@@ -26,7 +33,6 @@ def local_delete_targets(show):
     `output_lock`) -- are ever considered here, so an output_dir shared with
     unrelated files is left otherwise untouched.
     """
-    from .rename import MANAGED_FOLDERS
     root = asset_root(show)
     names = list(MANAGED_FOLDERS) + ["feed.xml", ".termicast.oplock", ".termicast.lock"]
     return [path for path in (root / name for name in names) if path.exists()]

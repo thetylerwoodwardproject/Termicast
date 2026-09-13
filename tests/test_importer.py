@@ -287,3 +287,46 @@ def test_import_refuses_to_overwrite_slug_named_chapter_json(tmp_path, monkeypat
         importer.download_import(show, feed, preseed=preseed,
                                  require_preseed=True, naming="ep")
     assert occupied.read_text(encoding="utf-8") == "pre-existing"
+
+
+
+@pytest.mark.parametrize("suffix,content_type", [
+    (".m4a", "audio/mp4"), (".opus", "audio/ogg"), (".flac", "audio/flac"),
+    (".bin", "audio/mpeg"),   # unknown suffix still falls back to .mp3
+])
+def test_downloaded_audio_keeps_deliverable_suffixes(tmp_path, monkeypatch, suffix, content_type):
+    """A downloaded non-MP3 enclosure must keep its own suffix.
+
+    The importer carried a narrower suffix list than the archive adapter, so
+    an imported .m4a landed as .mp3 and was then served as audio/mpeg -- a
+    Content-Type that did not describe the bytes. Only the download path
+    renames suffixes; a preseeded asset keeps the name it was staged under.
+    """
+    from termicast import importer, validation
+    from termicast.media import content_type_for
+
+    url = f"https://old.example.org/audio/ep1{suffix}"
+    feed = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">'
+        '<channel><title>S</title><description>d</description><link>https://old.example.org</link>'
+        '<item><title>Ep</title><guid isPermaLink="false">ep-1</guid><description>d</description>'
+        f'<enclosure url="{url}" length="1234" type="audio/mpeg"/>'
+        '<pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>'
+        '<itunes:duration>60</itunes:duration>'
+        '</item></channel></rss>'
+    ).encode()
+
+    monkeypatch.setattr(validation, "_download",
+                        lambda u, handle, limit, progress=None: handle.write(b"fake-audio"))
+    monkeypatch.setattr(validation, "probe_local_media",
+                        lambda path: {"length": 10, "duration": 60.0})
+
+    show = new_show(title="S", description="d", base_url="https://new.example.org/show",
+                    output_dir=str(tmp_path / "out"))
+    show, episodes = importer.download_import(show, feed)
+
+    staged = episodes[0]["mp3_url"]
+    expected = suffix if suffix != ".bin" else ".mp3"
+    assert staged.endswith(expected), staged
+    assert content_type_for("audio/x" + expected) == content_type

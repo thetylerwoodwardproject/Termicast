@@ -28,15 +28,10 @@ from urllib.parse import urlsplit
 from lxml import etree
 
 from .feed import _parse_xml, _tag
+from .media import STAGEABLE_SUFFIXES, default_suffix
 from .importer import download_import, import_feed
 
 
-_SUPPORTED_SUFFIXES = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac",
-                       ".jpg", ".jpeg", ".png", ".json", ".vtt", ".srt", ".txt", ".html", ".pdf"}
-
-
-def _default_suffix(folder):
-    return {"audio": ".mp3", "chapters": ".json", "transcripts": ".vtt"}.get(folder, ".img")
 
 
 def _next_link(root):
@@ -106,8 +101,8 @@ def archive_feed(source, destination, *, max_pages=50):
         if url in assets:
             return assets[url]
         suffix = Path(urlsplit(url).path).suffix.lower()
-        if suffix not in _SUPPORTED_SUFFIXES:
-            suffix = _default_suffix(folder)
+        if suffix not in STAGEABLE_SUFFIXES:
+            suffix = default_suffix(folder)
         relative = folder + "/" + hashlib.sha256(url.encode()).hexdigest() + suffix
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)

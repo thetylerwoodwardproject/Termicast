@@ -15,9 +15,7 @@ from .storage import asset_root, local_relative
 
 def scan_show(db, show_id):
     with db.lock():
-        show = db.get_show(show_id)
-        if show is None:
-            raise ValueError("Unknown podcast ID")
+        show = db.require_show(show_id)
         episodes = db.list_episodes(show_id)
         with db.connection() as conn:
             template = conn.execute("SELECT template FROM shows WHERE id=?", (show_id,)).fetchone()[0]

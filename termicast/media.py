@@ -55,6 +55,20 @@ _OTHER_TYPES = {
 }
 
 
+# Suffixes a staged asset may keep: exactly those with a known Content-Type.
+# The importer used to carry a narrower inline list than the archive adapter,
+# so an imported .m4a/.opus/.flac enclosure was renamed .mp3 and then served
+# as audio/mpeg -- a Content-Type that did not match the bytes.
+STAGEABLE_SUFFIXES = frozenset(ENCLOSURE_TYPES) | frozenset(_OTHER_TYPES)
+
+# Fallback when a URL carries no usable suffix at all.
+DEFAULT_SUFFIXES = {"audio": ".mp3", "chapters": ".json", "transcripts": ".vtt"}
+
+
+def default_suffix(folder):
+    return DEFAULT_SUFFIXES.get(folder, ".img")
+
+
 def content_type_for(relative_path):
     """Return the Content-Type for a managed relative path, or None if unknown."""
     if relative_path == "feed.xml":

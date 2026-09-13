@@ -332,18 +332,29 @@ def _download(url, target, limit, progress=None):
                     progress(url, total, expected or None)
 
 
-def probe_local_media(path):
-    result = {"length": Path(path).stat().st_size}
+def _probe_duration(path):
+    """Duration in seconds from ffprobe, or None if it cannot be determined.
+
+    Both the local and the downloaded-URL probe ran this identical command
+    and swallowed the identical exception set; keeping one copy means the
+    two cannot drift apart.
+    """
     try:
         process = subprocess.run(
             ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
              "format=duration", "-of", "json", str(path)],
             capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True, stdin=subprocess.DEVNULL)
         duration = float(json.loads(process.stdout)["format"]["duration"])
-        if _number(duration, positive=True):
-            result["duration"] = duration
+        return duration if _number(duration, positive=True) else None
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        pass
+        return None
+
+
+def probe_local_media(path):
+    result = {"length": Path(path).stat().st_size}
+    duration = _probe_duration(path)
+    if duration is not None:
+        result["duration"] = duration
     return result
 
 
@@ -381,16 +392,10 @@ def probe_media(url) -> dict:
             media.flush()
             if media.tell() > 0:
                 result.setdefault("length", media.tell())
-            process = subprocess.run(
-                ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
-                 "format=duration", "-of", "json", media.name],
-                capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True,
-                stdin=subprocess.DEVNULL,
-            )
-            duration = float(json.loads(process.stdout)["format"]["duration"])
-            if _number(duration, positive=True):
+            duration = _probe_duration(media.name)
+            if duration is not None:
                 result["duration"] = duration
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError):
         pass
     return result
 

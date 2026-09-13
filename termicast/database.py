@@ -113,6 +113,16 @@ class Database:
             row = conn.execute("SELECT settings FROM shows WHERE id = ?", (show_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
+    def require_show(self, show_id):
+        """get_show, but refusing an unknown ID rather than returning None.
+
+        Eight call sites repeated the same None check and message.
+        """
+        show = self.get_show(show_id)
+        if show is None:
+            raise ValueError("Unknown podcast ID")
+        return show
+
     def save_show(self, show, template=None, episodes=None):
         show = dict(show)
         errors = validate_show(show)
