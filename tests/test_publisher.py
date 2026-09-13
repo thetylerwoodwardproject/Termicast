@@ -119,6 +119,45 @@ def test_s3_publish_uploads_chapter_images(db, show, monkeypatch):
     assert "images/chapters/c1.jpg" in uploaded[0]
 
 
+def test_s3_publish_uploads_show_artwork(db, show, monkeypatch):
+    """The show's own cover art staged locally must be uploaded too.
+
+    Regression test: show-level artwork_url was dropped from the deploy set
+    entirely (only episode artwork_url was collected), so an imported show's
+    cover image was staged locally but never reached S3.
+    """
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, artwork_url="https://cdn.example.org/show/images/cover.jpg")
+    db.save_show(show)
+    image = Path(show["output_dir"]) / "images" / "cover.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"image-data")
+    uploaded = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: uploaded.append(list(paths)) or list(paths))
+    Publisher(db).publish(show["id"], make_episode())
+    assert uploaded, "deploy_paths should have been called"
+    assert "images/cover.jpg" in uploaded[0]
+
+
+def test_deploy_standalone_uploads_show_artwork(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=True, keep_local_media=True, artwork_url="https://cdn.example.org/show/images/cover.jpg")
+    db.save_show(show)
+    image = Path(show["output_dir"]) / "images" / "cover.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"image-data")
+    uploaded = []
+    from termicast import s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths",
+                        lambda s, paths, dry_run=False, verify=True: uploaded.append(list(paths)) or list(paths))
+    Publisher(db).publish(show["id"], make_episode())
+    uploaded.clear()
+    Publisher(db).deploy(show["id"], verify=False)
+    assert any("images/cover.jpg" in batch for batch in uploaded)
+
+
 def test_s3_keep_local_media_retains_working_copy(db, show, monkeypatch):
     show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
                 enabled=True, keep_local_media=True)

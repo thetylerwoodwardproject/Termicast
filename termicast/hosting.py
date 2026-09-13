@@ -170,6 +170,9 @@ def check_assets(show, episodes) -> list[str]:
     problems = []
     seen = set()
     base = asset_base(show)
+    if show.get("artwork_url"):
+        seen.add(show["artwork_url"])
+        problems.extend(check_url(show["artwork_url"], content_type_for(show["artwork_url"]) or "image/jpeg"))
     for episode in episodes:
         if episode.get("status") != "published":
             continue

@@ -65,6 +65,19 @@ def test_check_url_unreachable(monkeypatch):
     assert any("Unreachable" in p for p in problems)
 
 
+def test_check_assets_flags_unreachable_show_artwork(monkeypatch):
+    """The show's own cover art must be verified, not just episode artwork.
+
+    Regression test: check_assets used to only look at episode artwork_url,
+    so a show's cover image that never made it to hosting went unnoticed by
+    doctor/deploy verification.
+    """
+    show = new_show(base_url="https://e.org/show", artwork_url="https://e.org/show/images/cover.jpg")
+    monkeypatch.setattr(hosting, "check_url", lambda url, expected=None: [f"Unreachable: {url}"])
+    problems = hosting.check_assets(show, [])
+    assert any("images/cover.jpg" in p for p in problems)
+
+
 def test_doctor_aggregates_and_unknown_show():
     db = Mock()
     db.get_show.return_value = None

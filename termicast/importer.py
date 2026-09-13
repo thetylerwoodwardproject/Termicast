@@ -339,7 +339,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
     stage_parent = output if output.exists() else output.parent
     with tempfile.TemporaryDirectory(prefix=".termicast-import-", dir=stage_parent) as temporary:
         stage = Path(temporary) / "public"
-        for folder in ("audio", "chapters", "images/episodes", "images/show", "images/chapters", "transcripts"):
+        for folder in ("audio", "chapters", "images", "images/episodes", "images/chapters", "transcripts"):
             (stage / folder).mkdir(parents=True)
 
         def asset(url, folder, kind=""):
@@ -473,9 +473,9 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
 
         channel = root.find("channel")
         for element in channel.findall(_tag("itunes:image")):
-            asset(element.get("href"), "images/show", "show")
-        asset(channel.findtext("image/url"), "images/show", "show")
-        asset(show.get("artwork_url"), "images/show", "show")
+            asset(element.get("href"), "images", "show")
+        asset(channel.findtext("image/url"), "images", "show")
+        asset(show.get("artwork_url"), "images", "show")
         for item, episode in zip(channel.findall("item"), episodes):
             url = episode["mp3_url"]
             episode["mp3_url"] = asset(url, "audio")

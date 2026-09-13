@@ -253,6 +253,9 @@ class Publisher:
             with self.db.lock():
                 episodes = [e for e in self.db.list_episodes(show_id) if e["status"] == "published"]
             assets = set()
+            artwork = local_relative(show, show.get("artwork_url"))
+            if artwork:
+                assets.add(str(artwork))
             for episode in episodes:
                 assets |= episode_asset_paths(episode, show)
             if show.get("hosting") == "s3":
@@ -347,6 +350,9 @@ class Publisher:
 
     def _deploy_remote(self, snapshot, show):
         paths = set()
+        artwork = local_relative(show, show.get("artwork_url"))
+        if artwork:
+            paths.add(str(artwork))
         for episode in snapshot["episodes"]:
             paths |= episode_asset_paths(episode, show)
         try:
