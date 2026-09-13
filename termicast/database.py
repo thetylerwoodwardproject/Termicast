@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,7 @@ class Database:
         home = Path(os.environ.get("TERMICAST_HOME", Path.home() / ".local/share/termicast"))
         self.path = Path(path).expanduser().resolve() if path else (home.expanduser() / "termicast.db").resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._template_cache = (None, "[]")
         with self.lock(), self.connection() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS shows (
@@ -111,6 +113,13 @@ class Database:
             row = conn.execute("SELECT settings FROM shows WHERE id = ?", (show_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
+    def require_show(self, show_id):
+        """get_show, but refusing an unknown ID rather than returning None."""
+        show = self.get_show(show_id)
+        if show is None:
+            raise ValueError("Unknown podcast ID")
+        return show
+
     def save_show(self, show, template=None, episodes=None):
         show = dict(show)
         errors = validate_show(show)
@@ -141,15 +150,30 @@ class Database:
         with self.lock(), self.connection() as conn:
             conn.execute("DELETE FROM shows WHERE id = ?", (show_id,))
 
-    def list_episodes(self, show_id):
+    def _imported_episodes(self, template, url_map):
+        """Episodes recovered from an imported feed's XML, parsed at most once.
+
+        The template blob only changes when save_show() writes one, so it
+        keys the cache. Callers get their own copy -- these dicts are handed
+        out and edited -- via a JSON round-trip, which is ~3x cheaper than
+        deepcopy and lossless here, since episodes are stored as JSON anyway.
+        """
         from .importer import extract_episodes
+        key = (hashlib.sha256(template).hexdigest(), json.dumps(url_map, sort_keys=True))
+        if self._template_cache[0] != key:
+            self._template_cache = (key, json.dumps(extract_episodes(template, url_map)))
+        return json.loads(self._template_cache[1])
+
+    def list_episodes(self, show_id):
         with self.connection() as conn:
             rows = conn.execute("SELECT * FROM episodes WHERE show_id = ? ORDER BY publish_at DESC", (show_id,))
             episodes = [dict(json.loads(row["data"]), status=row["status"], publish_at=row["publish_at"]) for row in rows]
             show = conn.execute("SELECT template, settings FROM shows WHERE id=?", (show_id,)).fetchone()
+            if not (show and show["template"]):
+                return episodes
             known = {e["guid"] for e in episodes}
-            if show and show["template"]:
-                for episode in extract_episodes(show["template"], json.loads(show["settings"]).get("import_url_map")):
-                    if episode["guid"] not in known:
-                        episodes.append(dict(episode, status="published", publish_at=episode["published_at"]))
+            for episode in self._imported_episodes(
+                    show["template"], json.loads(show["settings"]).get("import_url_map")):
+                if episode["guid"] not in known:
+                    episodes.append(dict(episode, status="published", publish_at=episode["published_at"]))
             return sorted(episodes, key=lambda e: e["publish_at"], reverse=True)

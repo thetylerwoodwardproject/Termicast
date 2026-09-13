@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
+from functools import lru_cache
 import math
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,7 +11,7 @@ from uuid import UUID
 from lxml import etree
 from .models import chapters_relative
 from .media import ENCLOSURE_TYPES
-from .storage import asset_base
+from .storage import asset_base, asset_url
 
 
 NS = {
@@ -37,11 +38,31 @@ def op3_url(show, mp3_url):
     return mp3_url
 
 
+@lru_cache(maxsize=None)
 def _tag(name):
+    """Expand a prefixed name to Clark notation. Cached: small vocabulary,
+    called once per element built per episode."""
     if ":" in name:
         prefix, local = name.split(":", 1)
         return f"{{{NS[prefix]}}}{local}"
     return name
+
+
+# Which XML elements each episode field owns; built once rather than per item.
+# Only ~3% of render_feed, though: the real cost is lxml's, not Python's, so
+# don't come here expecting large wins.
+_REPLACE_TAGS = {
+    key: tuple(_tag(tag) for tag in tags) for key, tags in {
+        "title": ("title",), "description": ("description", "content:encoded"),
+        "link": ("link",), "mp3_url": ("enclosure",), "length": ("enclosure",),
+        "published_at": ("pubDate",), "duration": ("itunes:duration",),
+        "episode_type": ("itunes:episodeType",), "explicit": ("itunes:explicit",),
+        "episode_number": ("itunes:episode",), "season_number": ("itunes:season",),
+        "artwork_url": ("itunes:image", "image"), "transcript_url": ("podcast:transcript",),
+        "keywords": ("itunes:keywords",), "soundbites": ("podcast:soundbite",),
+        "chapters": ("podcast:chapters", "psc:chapters"),
+    }.items()
+}
 
 
 def _parse_xml(data):
@@ -251,7 +272,7 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
             _put(item, "podcast:soundbite", soundbite.get("title", ""),
                  startTime=_seconds(soundbite["startTime"]), duration=_seconds(soundbite["duration"]))
         if episode.get("chapters"):
-            _put(item, "podcast:chapters", url=asset_base(show) + "/" + chapters_relative(episode),
+            _put(item, "podcast:chapters", url=asset_url(show, chapters_relative(episode)),
                  type="application/json+chapters")
             chapters = _put(item, "psc:chapters", version="1.2")
             for chapter in episode["chapters"]:
@@ -263,17 +284,9 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
             if original_item.find("guid") is None:
                 _put(original_item, "guid", guid, isPermaLink="false")
             baseline = extract_episode(original_item)
-            groups = {
-                "title": ("title",), "description": ("description", "content:encoded"),
-                "link": ("link",), "mp3_url": ("enclosure",), "length": ("enclosure",),
-                "published_at": ("pubDate",), "duration": ("itunes:duration",),
-                "episode_type": ("itunes:episodeType",), "explicit": ("itunes:explicit",),
-                "episode_number": ("itunes:episode",), "season_number": ("itunes:season",),
-                "artwork_url": ("itunes:image", "image"), "transcript_url": ("podcast:transcript",),
-                "keywords": ("itunes:keywords",), "soundbites": ("podcast:soundbite",),
-                "chapters": ("podcast:chapters", "psc:chapters"),
-            }
-            replaced = {_tag(tag) for key, tags in groups.items() if episode.get(key) != baseline.get(key) or key in episode.get("_replace_fields", [])
+            forced = episode.get("_replace_fields", [])
+            replaced = {tag for key, tags in _REPLACE_TAGS.items()
+                        if episode.get(key) != baseline.get(key) or key in forced
                         for tag in tags}
             if show.get("op3") and episode.get("mp3_url"):
                 replaced.add(_tag("enclosure"))

@@ -280,6 +280,30 @@ def validate_episode(episode) -> list[str]:
     return errors
 
 
+def backfill_chapter_ends(chapters, duration):
+    """Give each chapter an endTime: the next chapter's start, else `duration`."""
+    for index, chapter in enumerate(chapters):
+        chapter.setdefault("endTime", chapters[index + 1]["startTime"]
+                           if index + 1 < len(chapters) else duration)
+    return chapters
+
+
+def validate_chapter_payload(payload, episode):
+    """Return the chapters array of a chapter-JSON document, or raise."""
+    if not isinstance(payload, dict):
+        raise ValueError("Chapter JSON must be an object")
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list) or not chapters:
+        raise ValueError("Chapter JSON requires a nonempty chapters array")
+    if any(not isinstance(chapter, dict) or "startTime" not in chapter for chapter in chapters):
+        raise ValueError("Each chapter must be an object with startTime")
+    backfill_chapter_ends(chapters, episode.get("duration"))
+    errors = validate_episode(dict(episode, chapters=chapters))
+    if errors:
+        raise ValueError("; ".join(errors))
+    return chapters
+
+
 class _HTTPSRedirectHandler(request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not validate_https(newurl):
@@ -332,18 +356,24 @@ def _download(url, target, limit, progress=None):
                     progress(url, total, expected or None)
 
 
-def probe_local_media(path):
-    result = {"length": Path(path).stat().st_size}
+def _probe_duration(path):
+    """Duration in seconds from ffprobe, or None if it cannot be determined."""
     try:
         process = subprocess.run(
             ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
              "format=duration", "-of", "json", str(path)],
             capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True, stdin=subprocess.DEVNULL)
         duration = float(json.loads(process.stdout)["format"]["duration"])
-        if _number(duration, positive=True):
-            result["duration"] = duration
+        return duration if _number(duration, positive=True) else None
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        pass
+        return None
+
+
+def probe_local_media(path):
+    result = {"length": Path(path).stat().st_size}
+    duration = _probe_duration(path)
+    if duration is not None:
+        result["duration"] = duration
     return result
 
 
@@ -381,16 +411,10 @@ def probe_media(url) -> dict:
             media.flush()
             if media.tell() > 0:
                 result.setdefault("length", media.tell())
-            process = subprocess.run(
-                ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
-                 "format=duration", "-of", "json", media.name],
-                capture_output=True, text=True, timeout=NETWORK_TIMEOUT, check=True,
-                stdin=subprocess.DEVNULL,
-            )
-            duration = float(json.loads(process.stdout)["format"]["duration"])
-            if _number(duration, positive=True):
+            duration = _probe_duration(media.name)
+            if duration is not None:
                 result["duration"] = duration
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError):
         pass
     return result
 

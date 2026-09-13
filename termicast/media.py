@@ -7,7 +7,7 @@ image processing do not.
 """
 
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import io
 import json
 import os
@@ -55,6 +55,18 @@ _OTHER_TYPES = {
 }
 
 
+# Suffixes a staged asset may keep: exactly those with a known Content-Type.
+# Narrowing this renames e.g. .m4a to .mp3, then serves it as audio/mpeg.
+STAGEABLE_SUFFIXES = frozenset(ENCLOSURE_TYPES) | frozenset(_OTHER_TYPES)
+
+# Fallback when a URL carries no usable suffix at all.
+DEFAULT_SUFFIXES = {"audio": ".mp3", "chapters": ".json", "transcripts": ".vtt"}
+
+
+def default_suffix(folder):
+    return DEFAULT_SUFFIXES.get(folder, ".img")
+
+
 def content_type_for(relative_path):
     """Return the Content-Type for a managed relative path, or None if unknown."""
     if relative_path == "feed.xml":
@@ -83,7 +95,6 @@ class Prepared:
     image_dims: tuple[int, int] | None = None
     transcript_path: Path | None = None
     transcript_relative: str | None = None
-    warnings: list = field(default_factory=list)
 
     def review(self) -> dict:
         data = {
@@ -95,12 +106,16 @@ class Prepared:
             "audio_channels": self.audio_meta.get("channels", "?"),
             "audio_duration": f"{self.audio_meta.get('duration', '?')} s",
         }
+        if self.audio_note:
+            data["audio_handling"] = self.audio_note
         if self.image_relative:
             data["image_file"] = self.image_relative
             data["image_before"] = f"{self.image_before} bytes"
             data["image_after"] = f"{self.image_after} bytes"
             if self.image_dims:
                 data["image_dimensions"] = f"{self.image_dims[0]}x{self.image_dims[1]}"
+            if self.image_note:
+                data["image_handling"] = self.image_note
         if self.transcript_relative:
             data["transcript_file"] = self.transcript_relative
         return data
@@ -281,7 +296,10 @@ def _prepare_audio(source, dest_dir, slug, preset_name, keep, update=None):
             _ffmpeg(args, update=update, duration=meta["duration"] or None)
             note = f"converted to MP3 {preset['bitrate'] // 1000} kbps / {preset['sample_rate']} Hz"
         _atomic_install(temp, dest)
-        meta = probe_audio(dest)
+        if not pass_through:
+            # A pass-through is a byte-identical copy, so `meta` already
+            # describes the installed file; re-probing rescans the whole file.
+            meta = probe_audio(dest)
     finally:
         temp.unlink(missing_ok=True)
     return dest, f"audio/{dest.name}", before, dest.stat().st_size, meta, note
@@ -292,6 +310,7 @@ def _check_channels(meta):
         raise ValueError(
             "Multichannel audio is not supported. Export a mono or stereo file "
             f"and retry (detected {meta['channels']} channels).")
+
 
 
 def _needs_orientation(source):
@@ -315,6 +334,8 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
     with Image.open(source) as image:
         fmt = image.format
         size = image.size
+        # verify() must be the first call after open(), so the orientation
+        # tag cannot be read here -- _needs_orientation() reopens for it.
         image.verify()
 
     if keep:

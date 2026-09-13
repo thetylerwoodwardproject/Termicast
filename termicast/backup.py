@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import stat
 import sqlite3
 import tempfile
 from uuid import uuid4
@@ -29,7 +30,8 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
     """
     destination = Path(destination or db.path.parent / "backups").expanduser().resolve()
     now = datetime.now(timezone.utc)
-    name = f"termicast-{now.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:8]}.zip"
+    # Not `name`: the include_media walk below binds `name` per entry.
+    archive_name = f"termicast-{now.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:8]}.zip"
     with (nullcontext() if _locked else db.lock()), ExitStack() as locks:
         shows = db.list_shows()
         for show in shows:
@@ -38,7 +40,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                 raise ValueError("Backups must be outside every podcast's public asset directory")
             if assets.is_symlink():
                 raise ValueError("Refusing symbolic-link asset directory")
-            output = Path(show["output_dir"])
+            output = asset_root(show)
             if destination.is_relative_to(output.resolve()):
                 raise ValueError("Backups must be outside every podcast's public output directory")
             if output.is_symlink():
@@ -58,13 +60,13 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                     source.backup(target)
             finally:
                 target.close()
-            archive_path = Path(staging) / name
+            archive_path = Path(staging) / archive_name
             with archive_path.open("xb") as handle:
                 os.fchmod(handle.fileno(), 0o600)
                 with ZipFile(handle, "w", compression=ZIP_DEFLATED) as archive:
                     archive.write(snapshot, "termicast.db")
                     for show in shows:
-                        output = Path(show["output_dir"])
+                        output = asset_root(show)
                         prefix = f"outputs/{show['id']}"
                         manifest["shows"].append({"id": show["id"], "title": show["title"],
                                                   "output_dir": str(output), "archive_dir": prefix})
@@ -86,29 +88,36 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                                             raise ValueError(f"Refusing symbolic-link media: {path}")
                                     dirs[:] = [name for name in dirs if not name.startswith(".")]
                                     files.extend(Path(directory) / name for name in names if not name.startswith("."))
+                        # Set for membership, list for order: `files` holds
+                        # every media file when include_media is set.
+                        seen = set(files)
                         for episode in db.list_episodes(show["id"]):
+                            expected = []
                             if episode["status"] == "published" and episode.get("chapters"):
-                                expected = assets / chapters_relative(episode)
-                                if expected not in files:
-                                    files.append(expected)
+                                expected.append(assets / chapters_relative(episode))
                             if episode.get("_transcript_vtt"):
-                                expected = assets / transcript_relative(episode)
-                                if expected not in files:
-                                    files.append(expected)
+                                expected.append(assets / transcript_relative(episode))
+                            for path in expected:
+                                if path not in seen:
+                                    seen.add(path)
+                                    files.append(path)
                         for path in files:
-                            if path.is_symlink():
-                                raise ValueError(f"Refusing symbolic-link output file: {path}")
-                            if not path.exists():
+                            # One lstat answers all three questions.
+                            try:
+                                info = os.lstat(path)
+                            except OSError:
                                 manifest["missing_files"].append(str(path))
                                 continue
-                            if not path.is_file():
+                            if stat.S_ISLNK(info.st_mode):
+                                raise ValueError(f"Refusing symbolic-link output file: {path}")
+                            if not stat.S_ISREG(info.st_mode):
                                 raise ValueError(f"Expected a regular output file: {path}")
                             relative = "feed.xml" if path == output / "feed.xml" else path.relative_to(assets).as_posix()
                             archive.write(path, f"{prefix}/{relative}")
                     archive.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            result = destination / name
+            result = destination / archive_name
             os.link(archive_path, result)
             fsync_dir(destination)
     return result

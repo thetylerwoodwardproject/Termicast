@@ -14,6 +14,11 @@ from urllib.parse import unquote, urlsplit
 from .validation import validate_https
 
 
+# Top-level folders Termicast creates and owns inside a show's output
+# directory. Here rather than rename.py so the dependency runs one way.
+MANAGED_FOLDERS = ("audio", "chapters", "images", "transcripts")
+
+
 def asset_root(show):
     return Path(show["output_dir"]).expanduser().absolute()
 
@@ -26,7 +31,6 @@ def local_delete_targets(show):
     `output_lock`) -- are ever considered here, so an output_dir shared with
     unrelated files is left otherwise untouched.
     """
-    from .rename import MANAGED_FOLDERS
     root = asset_root(show)
     names = list(MANAGED_FOLDERS) + ["feed.xml", ".termicast.oplock", ".termicast.lock"]
     return [path for path in (root / name for name in names) if path.exists()]
@@ -62,6 +66,11 @@ def asset_base(show):
     if show.get("hosting") == "s3":
         return (show.get("asset_base_url") or show.get("base_url", "")).rstrip("/")
     return show["base_url"].rstrip("/")
+
+
+def asset_url(show, relative):
+    """Public URL for a managed relative path. The inverse of local_relative."""
+    return f"{asset_base(show)}/{relative}"
 
 
 def local_relative(show, url):

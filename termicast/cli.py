@@ -13,37 +13,18 @@ from rich.table import Table
 from rich.text import Text
 
 from .database import Database
-from .backup import create_backup
-from .feed import validate_feed
-from .importer import import_feed, download_import
-from .csvio import export_csv, import_csv
-from .migration import migration_guidance
 from .models import new_show
 from .prompts import (
     ACCENT, confirm, console, edit_field, error, menu, show_banner, show_form, show_summary, text,
     warning, menu_utilities, show_faq, Cancelled, ExitRequested, edit_episode_form,
     optional_assets, add_episode, episode_form, hosting_menu,
+    DEPLOYED, DRY_RUN_DONE, DESTINATION_SETTINGS, hosting_label, run_menu,
 )
-from .publisher import Publisher, atomic_write
-from .repair import scan_show, repair_show
-from .hosting import doctor
 
+# .feed, .publisher, .importer and friends pull in lxml and the publishing
+# stack for one or two subcommands each, so they are imported where used --
+# the convention .archive and .s3deploy already follow below.
 
-def _describe_action_error(exc):
-    """Render an exception for the "Action failed" banner.
-
-    A bare PermissionError just names the path it couldn't write to (e.g. a
-    hidden staging directory next to the output folder), which reads as
-    baffling. Point at the directory that actually needs write access instead.
-    """
-    if isinstance(exc, PermissionError) and exc.filename:
-        path = Path(exc.filename)
-        directory = path if path.is_dir() else path.parent
-        return (f"Action failed: no write permission for {directory} "
-                f"(needed to create {path.name} there). Grant your account write "
-                f"access to that directory, e.g. `sudo chown \"$USER\" {directory}`, "
-                "then try again.")
-    return f"Action failed: {exc}"
 
 
 def _artwork_reviewer():
@@ -148,6 +129,7 @@ def _review_optional(episodes, root, show):
 
 
 def _check_repair(db, show):
+    from .repair import scan_show
     scan = scan_show(db, show["id"])
     console.print("Scan is offline. Absent optional chapters/transcripts are not errors.", markup=False)
     for issue in scan["issues"]:
@@ -167,11 +149,13 @@ def _check_repair(db, show):
     destination = output_dir or show["output_dir"]
     console.print(f"Regenerate: {destination}/feed.xml and saved chapter JSON\nPublic base URL: {show['base_url']}", markup=False)
     for target, source in recoveries.items():
-        from .storage import asset_root, asset_base
+        from .storage import asset_root, asset_url
         relative = Path(target).relative_to(asset_root(show))
-        console.print(f"Copy {source} -> {asset_root(show) / relative}\nURL: {asset_base(show)}/{relative.as_posix()}", markup=False)
+        console.print(f"Copy {source} -> {asset_root(show) / relative}\n"
+                      f"URL: {asset_url(show, relative.as_posix())}", markup=False)
     if not confirm("Back up saved state/feeds/chapters and regenerate WITHOUT releasing scheduled episodes?", False):
         return
+    from .repair import repair_show
     backup, result = repair_show(db, scan, recoveries, output_dir)
     console.print(f"Backup: {backup}", markup=False)
     for issue in result["issues"]:
@@ -180,6 +164,7 @@ def _check_repair(db, show):
 
 
 def _backup(db, destination=None, include_media=False):
+    from .backup import create_backup
     path = create_backup(db, destination, include_media=include_media)
     console.print(f"Backup saved: {path}", style=ACCENT, markup=False)
     with ZipFile(path) as archive:
@@ -250,17 +235,12 @@ def _episodes(db, publisher, show):
 
 
 def _tools(db, publisher, show):
-    while True:
-        action = menu("Tools", ["Check And Repair", "Regenerate feed", "Import episode CSV",
-                                "Export episode CSV", "Migration guidance", "Back"])
-        if action == 6:
-            return
-        try:
-            _tool_action(db, publisher, show, action)
-        except Cancelled:
-            console.print("Cancelled. Nothing was changed.")
-        if action == 1:
-            show = db.get_show(show["id"])
+    state = {"show": show}
+    run_menu("Tools", ["Check And Repair", "Regenerate feed", "Import episode CSV",
+                       "Export episode CSV", "Migration guidance", "Back"],
+             lambda action: _tool_action(db, publisher, state["show"], action),
+             back=6,
+             refresh=lambda: state.update(show=db.get_show(show["id"])))
 
 
 def _tool_action(db, publisher, show, action):
@@ -273,48 +253,51 @@ def _tool_action(db, publisher, show, action):
     elif action == 3:
         path = text("CSV path (merge; no episodes deleted)", required=True)
         if confirm("Preflight and merge this CSV?", False):
+            from .csvio import import_csv
             count = import_csv(db, show["id"], path)
             console.print(f"Merged {count} episodes.", style=ACCENT)
     elif action == 4:
         selection = ("all", "published", "scheduled")[menu("Export episodes", ["All", "Published", "Scheduled"]) - 1]
         path = text("Private CSV destination", required=True)
+        from .csvio import export_csv
         console.print(str(export_csv(db, show["id"], path, selection)), markup=False)
     elif action == 5:
+        from .migration import migration_guidance
         console.print(migration_guidance(show), markup=False)
 
 
 def _open_show(db, publisher, show):
-    while True:
-        show = db.get_show(show["id"])
-        show_summary(db, show)
-        action = menu("CONTROL ROOM / Choose a number",
-                      ["New episode", "Episodes", "Podcast settings",
-                       "Hosting", "Tools", "Switch podcast / Back"],
-                      headers={0: "PUBLISH & MANAGE", 2: "CONFIGURATION",
-                               4: "TOOLS", 5: "SESSION"})
-        try:
-            if action == 6:
-                return
-            if action == 1:
-                episode_form(show, publisher, db)
-            elif action == 2:
-                _episodes(db, publisher, show)
-            elif action == 3:
-                updated = show_form(show)
-                if updated is not None:
-                    db.save_show(updated)
-                    publisher.regenerate(updated["id"])
-                    console.print("Settings saved and feed regenerated.", style=ACCENT)
-            elif action == 4:
-                hosting_menu(db, publisher, show)
-            elif action == 5:
-                _tools(db, publisher, show)
-        except EOFError:
-            raise
-        except Cancelled:
-            console.print("Cancelled. Nothing was changed.")
-        except Exception as exc:
-            error(_describe_action_error(exc))
+    state = {"show": show}
+
+    def reload():
+        state["show"] = db.get_show(show["id"])
+        show_summary(db, state["show"])
+
+    run_menu("CONTROL ROOM / Choose a number",
+             ["New episode", "Episodes", "Podcast settings",
+              "Hosting", "Tools", "Switch podcast / Back"],
+             lambda action: _open_show_action(db, publisher, state["show"], action),
+             back=6,
+             headers={0: "PUBLISH & MANAGE", 2: "CONFIGURATION", 4: "TOOLS", 5: "SESSION"},
+             refresh=reload)
+
+
+def _open_show_action(db, publisher, show, action):
+    """Run one CONTROL ROOM action; the caller reports failures."""
+    if action == 1:
+        episode_form(show, publisher, db)
+    elif action == 2:
+        _episodes(db, publisher, show)
+    elif action == 3:
+        updated = show_form(show)
+        if updated is not None:
+            db.save_show(updated)
+            publisher.regenerate(updated["id"])
+            console.print("Settings saved and feed regenerated.", style=ACCENT)
+    elif action == 4:
+        hosting_menu(db, publisher, show)
+    elif action == 5:
+        _tools(db, publisher, show)
 
 
 def _pick_output_dir(destination):
@@ -401,6 +384,7 @@ def _load_resume(db):
 
 
 def _save_resume(db, destination, overwrite, progress):
+    from .publisher import atomic_write
     atomic_write(_resume_path(db), json.dumps(
         {"destination": destination, "overwrite": overwrite, "progress": progress}, indent=2).encode())
 
@@ -422,6 +406,7 @@ def _finish_import(publisher, db, show, source):
     succeeds; if it fails, the show and feed are reported as saved locally
     with `termicast deploy <id>` as the retry command.
     """
+    from .migration import migration_guidance
     _clear_resume(db)
     if show.get("hosting") == "s3" and not show.get("enabled"):
         console.print("Uploading imported media to S3 (this always runs once after import, "
@@ -439,6 +424,20 @@ def _finish_import(publisher, db, show, source):
     console.print(migration_guidance(show, source), markup=False)
 
 
+def _staged_show(settings, destination):
+    """Build a new show from imported identity, pointed at the chosen location.
+
+    Returns None when the user backs out of the settings form.
+    """
+    show = new_show(**settings)
+    show.update(settings)
+    show["output_dir"] = destination["output_dir"]
+    show["base_url"] = destination["base_url"]
+    show.update({key: value for key, value in destination.items()
+                 if key in DESTINATION_SETTINGS})
+    return show_form(show)
+
+
 def _create_or_import(db, publisher, importing=False):
     source = ""
     template = None
@@ -450,8 +449,7 @@ def _create_or_import(db, publisher, importing=False):
         resumed = _load_resume(db)
         if resumed is not None:
             saved_destination, saved_overwrite, saved_progress = resumed
-            hosting_label = ("S3-compatible storage" if saved_destination.get("hosting") == "s3"
-                             else "Local web server")
+            saved_hosting = hosting_label(saved_destination)
             if saved_progress is None:
                 console.print(
                     f"Found a saved import setup from an older version: output dir "
@@ -471,7 +469,7 @@ def _create_or_import(db, publisher, importing=False):
                 console.print(
                     f"Found a saved import setup: output dir "
                     f"{saved_destination.get('output_dir') or '(not set)'}, hosting: "
-                    f"{hosting_label}. Import source is next.", markup=False)
+                    f"{saved_hosting}. Import source is next.", markup=False)
             if confirm("Resume this setup instead of starting over?", True):
                 destination, overwrite = saved_destination, saved_overwrite
                 if saved_progress is None or saved_progress == "output":
@@ -499,14 +497,7 @@ def _create_or_import(db, publisher, importing=False):
         if kind == 2:
             manifest = text("Archive manifest path (manifest.json)", required=True)
             from .archive import archive_identity, import_archive
-            settings = archive_identity(manifest)
-            show = new_show(**settings)
-            show.update(settings)
-            show["output_dir"] = destination["output_dir"]
-            show["base_url"] = destination["base_url"]
-            show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")})
-            show = show_form(show)
+            show = _staged_show(archive_identity(manifest), destination)
             if show is None:
                 return
             from .archive import load_manifest, merged_template
@@ -518,20 +509,16 @@ def _create_or_import(db, publisher, importing=False):
                                                       overwrite=overwrite)
         else:
             source = text("Existing feed (HTTPS URL or local XML path)", required=True)
+            from .importer import import_feed
             settings, template = import_feed(source)
-            show = new_show(**settings)
-            show.update(settings)
             console.print("Choose the NEW hosting location; imported identity and XML are retained.",
                           style=ACCENT)
-            show["output_dir"] = destination["output_dir"]
-            show["base_url"] = destination["base_url"]
-            show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")})
-            show = show_form(show)
+            show = _staged_show(settings, destination)
             if show is None:
                 return
             from .importer import extract_episodes
             scheme, fallback = _choose_naming(extract_episodes(template), show)
+            from .importer import download_import
             show, episodes = download_import(show, template,
                                              review_optional=lambda episodes, root: _review_optional(episodes, root, show),
                                              resolve_optional=_resolve_optional,
@@ -543,8 +530,7 @@ def _create_or_import(db, publisher, importing=False):
         if show is None:
             return
     show = db.save_show(show, template=template, episodes=episodes)
-    hosting_label = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
-    console.print(f"Hosting: {hosting_label}.", style=ACCENT, markup=False)
+    console.print(f"Hosting: {hosting_label(show)}.", style=ACCENT, markup=False)
     if show.get("hosting") == "s3":
         bucket = show.get("bucket", "")
         prefix = show.get("prefix", "")
@@ -560,34 +546,30 @@ def _create_or_import(db, publisher, importing=False):
 
 def _interactive(db, publisher):
     show_banner()
-    while True:
-        action = menu("Termicast", ["Open podcast", "Import existing podcast", "Create podcast",
-                                    "Forget podcast", "Delete podcast", "Quit"])
-        try:
-            if action == 6:
-                return 0
-            if action == 1:
-                show = _select_show(db)
-                if show:
-                    _open_show(db, publisher, show)
-            elif action in (2, 3):
-                _create_or_import(db, publisher, importing=action == 2)
-            elif action == 4:
-                show = _select_show(db, "Forget podcast")
-                if show and confirm(f"Forget {show['title']} and its managed drafts? "
-                                    "Feed and chapter files will NOT be deleted."):
-                    db.forget_show(show["id"])
-                    console.print("Podcast forgotten. Output files were not deleted.", style=ACCENT)
-            elif action == 5:
-                show = _select_show(db, "Delete podcast")
-                if show:
-                    _delete_show(db, show)
-        except EOFError:
-            raise
-        except Cancelled:
-            console.print("Cancelled. Nothing was changed.")
-        except Exception as exc:
-            error(_describe_action_error(exc))
+    run_menu("Termicast", ["Open podcast", "Import existing podcast", "Create podcast",
+                           "Forget podcast", "Delete podcast", "Quit"],
+             lambda action: _top_level_action(db, publisher, action), back=6)
+    return 0
+
+
+def _top_level_action(db, publisher, action):
+    """Run one top-level menu action; the caller reports failures."""
+    if action == 1:
+        show = _select_show(db)
+        if show:
+            _open_show(db, publisher, show)
+    elif action in (2, 3):
+        _create_or_import(db, publisher, importing=action == 2)
+    elif action == 4:
+        show = _select_show(db, "Forget podcast")
+        if show and confirm(f"Forget {show['title']} and its managed drafts? "
+                            "Feed and chapter files will NOT be deleted."):
+            db.forget_show(show["id"])
+            console.print("Podcast forgotten. Output files were not deleted.", style=ACCENT)
+    elif action == 5:
+        show = _select_show(db, "Delete podcast")
+        if show:
+            _delete_show(db, show)
 
 
 def _delete_show(db, show):
@@ -658,7 +640,9 @@ def _validate(db, show_id):
     for show in shows:
         label = f"{show.get('title', show['id'])} ({show['id']})"
         try:
-            path = Path(show["output_dir"]).expanduser() / "feed.xml"
+            from .storage import asset_root
+            path = asset_root(show) / "feed.xml"
+            from .feed import validate_feed
             errors = validate_feed(path.read_bytes())
         except Exception as exc:
             errors = [f"Cannot validate managed feed: {exc}"]
@@ -754,7 +738,7 @@ def main(argv=None):
         if args.command == "validate":
             return _validate(db, args.show_id)
         if args.command == "doctor":
-            from .hosting import summarize_verification_problems
+            from .hosting import doctor, summarize_verification_problems
             problems = doctor(db, args.show_id)
             if problems:
                 for line in summarize_verification_problems(problems, target="mixed"):
@@ -762,6 +746,7 @@ def main(argv=None):
                 return 1
             console.print("No hosting problems found.", style=ACCENT)
             return 0
+        from .publisher import Publisher
         publisher = Publisher(db)
         if args.command == "fix-host-mime":
             show = db.get_show(args.show_id)
@@ -784,8 +769,8 @@ def main(argv=None):
             try:
                 publisher.deploy(args.show_id, dry_run=args.dry_run, verify=not args.no_verify)
             except RuntimeError as exc:
-                if args.dry_run or args.no_verify or not any(
-                        marker in str(exc) for marker in ("Unexpected Content-Type ", "Missing Content-Type ")):
+                from .hosting import is_mime_problem
+                if args.dry_run or args.no_verify or not is_mime_problem(exc):
                     raise
                 error(exc)
                 console.print(f"Open the guided host correction with: termicast fix-host-mime {args.show_id}", markup=False)
@@ -799,13 +784,14 @@ def main(argv=None):
                     console.print("Correction cancelled; deployment verification failed.")
                 # A repair does not complete a partially failed deployment.
                 return 1
-            console.print("Deployed." if not args.dry_run else "Dry run complete: no uploads or bucket probes were made.",
-                          style=ACCENT)
+            console.print(DEPLOYED if not args.dry_run else DRY_RUN_DONE, style=ACCENT)
             return 0
         if args.command == "import-csv":
+            from .csvio import import_csv
             console.print(f"Merged {import_csv(db, args.show_id, args.path)} episodes.")
             return 0
         if args.command == "export-csv":
+            from .csvio import export_csv
             console.print(str(export_csv(db, args.show_id, args.path, args.filter)), markup=False)
             return 0
         if args.command == "publish-due":

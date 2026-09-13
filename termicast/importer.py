@@ -1,5 +1,6 @@
 """Bounded, non-resolving RSS imports returning JSON-compatible profiles."""
 
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
@@ -13,7 +14,9 @@ import shutil
 import tempfile
 
 from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
-from .models import ASSET_ROLES, new_episode, plan_slugs
+from .media import STAGEABLE_SUFFIXES, default_suffix
+from .models import (ASSET_ROLES, chapters_relative, new_episode, plan_slugs,
+                     transcript_relative)
 from .publisher import atomic_write, fsync_dir
 from .validation import _HTTPSRedirectHandler
 from . import validation
@@ -33,15 +36,21 @@ def _uses_op3(root):
     return False
 
 
+def _text(node, name, default=""):
+    """Text of a child element, falling back when absent or empty."""
+    return node.findtext(_tag(name), default) or default
+
+
+def _attr(node, name, key):
+    """Attribute of a child element, or "" when either is absent."""
+    element = node.find(_tag(name))
+    return element.get(key, "") if element is not None else ""
+
+
 def _extract_show(root, source):
     channel = root.find("channel")
-
-    def text(name, default=""):
-        return channel.findtext(_tag(name), default=default) or default
-
-    def attr(name, key):
-        element = channel.find(_tag(name))
-        return element.get(key, "") if element is not None else ""
+    text = partial(_text, channel)
+    attr = partial(_attr, channel)
 
     feed_url = source
     for link in channel.findall(_tag("atom:link")):
@@ -132,12 +141,8 @@ def rewrite_urls(root, mapping):
 
 
 def extract_episode(item):
-    def text(name, default=""):
-        return item.findtext(_tag(name), default) or default
-
-    def attr(name, key):
-        element = item.find(_tag(name))
-        return element.get(key, "") if element is not None else ""
+    text = partial(_text, item)
+    attr = partial(_attr, item)
 
     url = attr("enclosure", "url")
     guid = text("guid") or str(uuid5(NAMESPACE_URL, url))
@@ -318,7 +323,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
     errors = validation.validate_show(show)
     if errors:
         raise ValueError("; ".join(errors))
-    from .storage import asset_root, asset_base
+    from .storage import asset_root, asset_base, asset_url
     output = Path(show["output_dir"]).expanduser().absolute()
     assets = asset_root(show)
     if (not show.get("hosting") and output.exists()) or output.is_symlink():
@@ -368,14 +373,14 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
-                mapping[url] = asset_base(show) + "/" + relative
+                mapping[url] = asset_url(show, relative)
                 local_paths[url] = path
             elif require_preseed:
                 raise ValueError(f"Archive is missing a staged asset for {url}")
             else:
                 suffix = Path(urlsplit(url).path).suffix.lower()
-                if suffix not in (".mp3", ".jpg", ".jpeg", ".png", ".json", ".vtt", ".srt", ".txt", ".html", ".pdf"):
-                    suffix = {"audio": ".mp3", "chapters": ".json", "transcripts": ".vtt"}.get(folder, ".img")
+                if suffix not in STAGEABLE_SUFFIXES:
+                    suffix = default_suffix(folder)
                 relative = folder + "/" + hashlib.sha256(url.encode()).hexdigest() + suffix
                 path = stage / relative
                 try:
@@ -386,14 +391,14 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
-                mapping[url] = asset_base(show) + "/" + relative
+                mapping[url] = asset_url(show, relative)
                 local_paths[url] = path
             if kind:
                 converted_path = _convert_import_artwork(path, url, review_artwork, kind=kind)
                 if converted_path != path:
                     path = converted_path
                     relative = path.relative_to(stage).as_posix()
-                    mapping[url] = asset_base(show) + "/" + relative
+                    mapping[url] = asset_url(show, relative)
                     local_paths[url] = path
                 validation.inspect_local_artwork(path, episode=kind == "episode", chapter=kind == "chapter")
             return mapping[url]
@@ -406,16 +411,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                     result = asset(url, folder)
                     if folder == "chapters":
                         payload = json.loads(local_paths[url].read_text())
-                        chapters = payload["chapters"]
-                        if not isinstance(chapters, list) or not chapters:
-                            raise ValueError("Chapter JSON requires a nonempty chapters array")
-                        if any(not isinstance(chapter, dict) or "startTime" not in chapter for chapter in chapters):
-                            raise ValueError("Each chapter must be an object with startTime")
-                        for index, chapter in enumerate(chapters):
-                            chapter.setdefault("endTime", chapters[index + 1]["startTime"] if index + 1 < len(chapters) else episode["duration"])
-                        errors = validation.validate_episode(dict(episode, chapters=chapters))
-                        if errors:
-                            raise ValueError("; ".join(errors))
+                        chapters = validation.validate_chapter_payload(payload, episode)
                         for chapter in chapters:
                             if chapter.get("img") and chapter["img"] not in mapping.values():
                                 chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
@@ -456,7 +452,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             os.replace(path, target)
             local_paths[url] = target
             relative = target.relative_to(stage).as_posix()
-            mapping[url] = asset_base(show) + "/" + relative
+            mapping[url] = asset_url(show, relative)
             return relative
 
         def source_for(public_url):
@@ -516,10 +512,10 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             for element in item.findall(_tag("podcast:chapters")):
                 url = element.get("url")
                 chapters = optional(url, "chapters", episode)
-                for index, chapter in enumerate(chapters):
+                validation.backfill_chapter_ends(chapters, episode["duration"])
+                for chapter in chapters:
                     if chapter.get("img") and chapter["img"] not in mapping.values():
                         chapter["img"] = asset(chapter["img"], "images/chapters", "chapter")
-                    chapter.setdefault("endTime", chapters[index + 1]["startTime"] if index + 1 < len(chapters) else episode["duration"])
                 episode["chapters"] = chapters
                 episode.setdefault("_replace_fields", []).append("chapters")
             for chapter in episode["chapters"]:
@@ -539,9 +535,8 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             if errors:
                 raise ValueError("; ".join(errors))
         files = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file())
-        from .models import chapter_filename
-        generated = ["chapters/" + chapter_filename(e["guid"]) for e in episodes if e.get("chapters")]
-        generated += ["transcripts/" + chapter_filename(e["guid"]) + ".vtt" for e in episodes if e.get("_transcript_vtt")]
+        generated = [chapters_relative(e) for e in episodes if e.get("chapters")]
+        generated += [transcript_relative(e) for e in episodes if e.get("_transcript_vtt")]
         collisions = []
         for relative in set(files + generated):
             target = assets / relative

@@ -1,12 +1,14 @@
 """Ordered, verified S3-compatible deployment using the external `s4cmd` tool.
 
 Credentials stay in `~/.s3cfg`; Termicast only supplies nonsecret destination
-settings. Uploads are serialized (one subprocess at a time) and use s4cmd's
-`--sync-check` md5 metadata so unchanged objects are skipped and multipart ETags
-are never treated as ordinary MD5 hashes.
+settings. Uploads are batched one `s4cmd put` per managed folder and run one
+subprocess at a time, and use s4cmd's `--sync-check` md5 metadata so unchanged
+objects are skipped and multipart ETags are never treated as ordinary MD5
+hashes. See `batches()` for why a folder is the unit.
 """
 
 import configparser
+from functools import lru_cache
 import io
 import os
 import secrets
@@ -14,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .media import content_type_for
 from .storage import asset_root
@@ -99,6 +101,7 @@ def write_s3cfg(access_key, secret_key, path=None):
     atomic_write(cfg_path, buffer.getvalue().encode(), mode=0o600)
 
 
+@lru_cache(maxsize=1)
 def s4cmd_path():
     """Resolve the s4cmd executable, preferring the active venv, then PATH."""
     candidate = Path(sys.executable).parent / "s4cmd"
@@ -117,10 +120,24 @@ def object_key(show, relative):
     return f"{prefix}/{relative}" if prefix else relative
 
 
-def s4cmd_args(show, content_type):
-    args = [s4cmd_path(), "put"]
+def _s4cmd_base(show, verb):
+    """Executable, verb, and the endpoint override every invocation needs.
+
+    Miss the endpoint and a non-AWS show silently falls back to AWS.
+    """
+    args = [s4cmd_path(), verb]
     if show.get("endpoint_url"):
         args += ["--endpoint-url", show["endpoint_url"]]
+    return args
+
+
+def _failure(process):
+    """s4cmd reports failures on either stream depending on the verb."""
+    return process.stderr.strip() or process.stdout.strip()
+
+
+def s4cmd_args(show, content_type):
+    args = _s4cmd_base(show, "put")
     args += ["--num-threads", str(NUM_THREADS),
              "--multipart-split-size", str(MULTIPART_SPLIT),
              "--max-singlepart-upload-size", str(SINGLEPART_LIMIT),
@@ -148,9 +165,61 @@ def upload_file(show, local_path, remote_relative, dry_run=False, timeout=None):
         str(local_path), f"s3://{show['bucket']}/{object_key(show, remote_relative)}"]
     process = _run(args, timeout=timeout)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"s4cmd upload failed for {remote_relative}: {message}"
+            f"{_permission_help(show, message)}") from None
+
+
+def batches(relative_paths):
+    """Group managed paths into runs that one `s4cmd put` can carry.
+
+    s4cmd's multi-source put joins each source's BASENAME onto the target
+    directory (S3Handler.put_files), so a batch must share one folder;
+    --API-ContentType applies to the whole invocation, so the type must be
+    uniform too. Input order is preserved within and across groups.
+    """
+    groups = {}
+    for relative in relative_paths:
+        content_type = content_type_for(relative)
+        if content_type is None:
+            raise ValueError(
+                f"No Content-Type mapping for {relative}; use a supported "
+                "audio, image, transcript, chapter, or feed format")
+        key = (PurePosixPath(relative).parent.as_posix(), content_type)
+        groups.setdefault(key, []).append(relative)
+    for (folder, content_type), group in groups.items():
+        names = [PurePosixPath(relative).name for relative in group]
+        # Holds while paths are unique per folder; if it ever stops, the
+        # batch silently overwrites itself.
+        assert len(set(names)) == len(names), f"duplicate basenames in {folder}"
+    return groups
+
+
+def upload_batch(show, root, relatives, content_type, dry_run=False, timeout=None):
+    """Upload one batch of files in a single s4cmd process.
+
+    See batches() for why a batch is one folder. A multi-source put also
+    lets --num-threads work, since put_files uses its own thread pool.
+    """
+    root = Path(root)
+    for relative in relatives:
+        if not (root / relative).is_file():
+            raise ValueError(f"Upload source does not exist: {root / relative}")
+    if dry_run:
+        return
+    if len(relatives) == 1:
+        upload_file(show, root / relatives[0], relatives[0], timeout=timeout)
+        return
+    folder = PurePosixPath(relatives[0]).parent.as_posix()
+    prefix = object_key(show, folder if folder != "." else "")
+    target = f"s3://{show['bucket']}/{prefix.rstrip('/')}/" if prefix else f"s3://{show['bucket']}/"
+    args = s4cmd_args(show, content_type) + [str(root / relative) for relative in relatives] + [target]
+    process = _run(args, timeout=timeout)
+    if process.returncode != 0:
+        message = _failure(process)
+        raise RuntimeError(
+            f"s4cmd upload failed for {len(relatives)} file(s) under {folder}: {message}"
             f"{_permission_help(show, message)}") from None
 
 
@@ -188,12 +257,15 @@ def deploy_paths(show, relative_paths, source_root=None, *, dry_run=False, verif
     root = Path(source_root) if source_root else asset_root(show)
     uploaded = []
     problems = []
-    for relative in relative_paths:
+    for (folder, content_type), group in batches(relative_paths).items():
         try:
-            upload_file(show, root / relative, relative, dry_run=dry_run)
-            uploaded.append(relative)
+            upload_batch(show, root, group, content_type, dry_run=dry_run)
+            uploaded.extend(group)
         except (ValueError, RuntimeError) as exc:
-            problems.append(f"{relative}: {exc}")
+            # No partial credit: a failed batch reports nothing uploaded, so
+            # upload_existing_assets cannot delete a local file whose object
+            # may never have landed. The raise below stops it regardless.
+            problems.append(f"{', '.join(group)}: {exc}")
             break
     if verify and not dry_run:
         from .hosting import check_url
@@ -214,17 +286,14 @@ def remote_rename(show, old_relative, new_relative):
     copy of media'): the bytes never leave S3, so nothing needs downloading
     and re-uploading. Metadata, including Content-Type, is preserved by s4cmd.
     """
-    args = [s4cmd_path(), "mv"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args += ["--force",
+    args = _s4cmd_base(show, "mv") + ["--force",
              f"s3://{show['bucket']}/{object_key(show, old_relative)}",
              f"s3://{show['bucket']}/{object_key(show, new_relative)}"]
     process = _run(args)
     if process.returncode != 0:
         raise RuntimeError(
             f"s4cmd rename failed for {old_relative} -> {new_relative}: "
-            f"{process.stderr.strip() or process.stdout.strip()}") from None
+            f"{_failure(process)}") from None
 
 
 WRITE_PROBE_PREFIX = ".termicast-write-check-"
@@ -233,10 +302,7 @@ WRITE_PROBE_PREFIX = ".termicast-write-check-"
 def _list_destination(show):
     """Return the raw `s4cmd ls` result for the show's bucket/prefix."""
     key = object_key(show, "")
-    args = [s4cmd_path(), "ls"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(f"s3://{show['bucket']}/{key}")
+    args = _s4cmd_base(show, "ls") + [f"s3://{show['bucket']}/{key}"]
     try:
         return _run(args, timeout=S3_CMD_TIMEOUT)
     except FileNotFoundError:
@@ -252,7 +318,7 @@ def _ensure_empty_destination(show):
     """
     process = _list_destination(show)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"Could not list the S3 destination to confirm it is empty: {message}"
             f"{_permission_help(show, message)}") from None
@@ -263,15 +329,11 @@ def _ensure_empty_destination(show):
 def _delete_probe(show, probe_relative):
     """Remove the exact probe object created by this invocation, if any."""
     remote = f"s3://{show['bucket']}/{object_key(show, probe_relative)}"
-    args = [s4cmd_path(), "del"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(remote)
-    process = _run(args, timeout=S3_CMD_TIMEOUT)
+    process = _run(_s4cmd_base(show, "del") + [remote], timeout=S3_CMD_TIMEOUT)
     if process.returncode != 0:
         raise RuntimeError(
             f"Uploaded a write-access probe object but could not remove it ({remote}); "
-            f"delete it manually: {process.stderr.strip() or process.stdout.strip()}")
+            f"delete it manually: {_failure(process)}")
 
 
 def _check_write_access(show):
@@ -338,7 +400,7 @@ def delete_prefix(show, dry_run=False, allow_empty_prefix=False):
     check_s3_access(show)
     process = _list_destination(show)
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"Could not list the S3 destination to delete it: {message}"
             f"{_permission_help(show, message)}") from None
@@ -346,13 +408,9 @@ def delete_prefix(show, dry_run=False, allow_empty_prefix=False):
     if count == 0 or dry_run:
         return count
     remote = f"s3://{show['bucket']}/{object_key(show, '')}"
-    args = [s4cmd_path(), "del", "--recursive"]
-    if show.get("endpoint_url"):
-        args += ["--endpoint-url", show["endpoint_url"]]
-    args.append(remote)
-    process = _run(args)
+    process = _run(_s4cmd_base(show, "del") + ["--recursive", remote])
     if process.returncode != 0:
-        message = process.stderr.strip() or process.stdout.strip()
+        message = _failure(process)
         raise RuntimeError(
             f"s4cmd delete failed for {remote}: {message}"
             f"{_permission_help(show, message)}") from None

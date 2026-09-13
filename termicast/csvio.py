@@ -24,9 +24,7 @@ def export_csv(db, show_id, path, selection="all"):
     if selection not in ("all", "published", "scheduled"):
         raise ValueError("Filter must be all, published, or scheduled")
     with db.lock():
-        show = db.get_show(show_id)
-        if show is None:
-            raise ValueError("Unknown podcast ID")
+        show = db.require_show(show_id)
         episodes = db.list_episodes(show_id)
         shows = db.list_shows()
     target = Path(path).expanduser().resolve()
@@ -62,13 +60,17 @@ def import_csv(db, show_id, path):
 
     def preflight(existing, show):
         prepared = []
+        # Rows without a GUID match on mp3_url; index once, not per row.
+        by_mp3 = {}
+        for episode in existing.values():
+            by_mp3.setdefault(episode["mp3_url"], []).append(episode)
         for number, row in enumerate(rows, 2):
             try:
                 if None in row or any(value is None for value in row.values()):
                     raise ValueError("Wrong number of CSV columns")
                 guid = row.get("guid", "")
                 if not guid:
-                    matches = [e for e in existing.values() if e["mp3_url"] == row.get("mp3_url", "")]
+                    matches = by_mp3.get(row.get("mp3_url", ""), [])
                     if len(matches) > 1:
                         raise ValueError("Ambiguous MP3 URL; supply an explicit GUID")
                     guid = matches[0]["guid"] if matches else str(uuid4())

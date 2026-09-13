@@ -4,21 +4,21 @@ from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import lru_cache
 import math
 import os
+from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo
 
-import questionary
-from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
-from prompt_toolkit.keys import Keys
-
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
+# questionary/prompt_toolkit cost ~150 ms to import and are needed only once a
+# menu or prompt is drawn, so they load lazily below. Keep it that way: the
+# scriptable commands, publish-due from cron above all, never draw one.
 
 from .models import (new_episode, new_show, positions_by_type, scheme_slug, slug_error, suggest_slug)
 from .faq import FAQ
@@ -32,14 +32,17 @@ WAVEFORM = "▁▂▃▅▇█▇▅▃▂▁"
 console = Console()
 _backup_action = ContextVar("termicast_backup_action", default=None)
 
-MENU_STYLE = questionary.Style([
-    ("qmark", f"fg:{ACCENT}"),
-    ("answer", f"fg:{ACCENT}"),
-    ("pointer", f"fg:{ACCENT}"),
-    ("highlighted", f"fg:{ACCENT} bold"),
-    ("selected", "noreverse"),
-    ("separator", f"fg:{ACCENT} bold"),
-])
+@lru_cache(maxsize=1)
+def _menu_style():
+    import questionary
+    return questionary.Style([
+        ("qmark", f"fg:{ACCENT}"),
+        ("answer", f"fg:{ACCENT}"),
+        ("pointer", f"fg:{ACCENT}"),
+        ("highlighted", f"fg:{ACCENT} bold"),
+        ("selected", "noreverse"),
+        ("separator", f"fg:{ACCENT} bold"),
+    ])
 
 
 def show_banner():
@@ -53,11 +56,11 @@ def show_banner():
 
 def show_summary(db, show):
     """Print a status box for the open show: episodes, schedule, hosting, feed."""
-    from pathlib import Path
     episodes = db.list_episodes(show["id"])
     scheduled = sum(1 for e in episodes if e.get("status") == "scheduled")
-    feed_present = (Path(show["output_dir"]).expanduser() / "feed.xml").is_file()
-    hosting = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
+    from .storage import asset_root
+    feed_present = (asset_root(show) / "feed.xml").is_file()
+    hosting = hosting_label(show)
     body = Text("\n").join([
         Text(str(show["title"]), style=f"bold {ACCENT}"),
         Text(f"Episodes: {len(episodes)}"),
@@ -92,7 +95,54 @@ def menu_utilities(backup_action):
         _backup_action.reset(token)
 
 
+def describe_action_error(exc):
+    """Turn an exception from a menu action into something actionable.
+
+    A bare PermissionError just names the path it couldn't write to (e.g. a
+    hidden staging directory next to the output folder), which reads as
+    baffling. Point at the directory that actually needs write access instead.
+    """
+    if isinstance(exc, PermissionError) and exc.filename:
+        path = Path(exc.filename)
+        directory = path if path.is_dir() else path.parent
+        return (f"Action failed: no write permission for {directory} "
+                f"(needed to create {path.name} there). Grant your account write "
+                f"access to that directory, e.g. `sudo chown \"$USER\" {directory}`, "
+                "then try again.")
+    return f"Action failed: {exc}"
+
+
+def run_menu(title, options, dispatch, *, back, headers=None, refresh=None,
+             cancelled="Cancelled. Nothing was changed.", on_error=None):
+    """Drive a numbered menu until `back` is chosen, under one error policy.
+
+    `refresh` runs at the top of each iteration, before the menu is drawn.
+
+    Keep the EOFError arm: unlike Cancelled and ExitRequested it derives from
+    Exception, so without it Ctrl-D reads as a failed action and the menu
+    redraws into EOF forever.
+    """
+    while True:
+        if refresh is not None:
+            refresh()
+        action = menu(title, options, headers=headers)
+        if action == back:
+            return
+        try:
+            dispatch(action)
+        except EOFError:
+            raise
+        except Cancelled:
+            console.print(cancelled)
+        except Exception as exc:
+            if on_error is None:
+                error(describe_action_error(exc))
+            else:
+                on_error(action, exc)
+
+
 def show_faq():
+    from rich.markdown import Markdown
     console.print(Markdown(FAQ))
 
 
@@ -118,6 +168,17 @@ SHOW_ESSENTIALS = (
 )
 
 S3_SETTINGS = ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")
+
+# Everything that describes where a show is published, for carrying a
+# destination onto a freshly imported show.
+DESTINATION_SETTINGS = ("hosting",) + S3_SETTINGS
+
+DEPLOYED = "Deployed."
+DRY_RUN_DONE = "Dry run complete: no uploads or bucket probes were made."
+
+
+def hosting_label(show) -> str:
+    return "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
 
 EXPORT_NOTICE = (
     "Smaller files help listeners on slower connections and reduce hosting bandwidth. "
@@ -164,6 +225,8 @@ class _Action:
 
 def _menu_key_bindings(digits, num_choices):
     """Key bindings for numeric jump-select plus hotkeys, exit, and interrupts."""
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
     bindings = KeyBindings()
 
     def jump(event, new_digits):
@@ -220,6 +283,9 @@ def menu(title, options, default=None, headers=None):
     rendered (unselectable) immediately before that option, for grouping
     otherwise-flat option lists without changing their numbering.
     """
+    import questionary
+    from prompt_toolkit.key_binding import merge_key_bindings
+
     headers = headers or {}
     num_choices = len(options)
 
@@ -250,7 +316,7 @@ def menu(title, options, default=None, headers=None):
             default=current_default,
             qmark="",
             instruction=" ",
-            style=MENU_STYLE,
+            style=_menu_style(),
             use_arrow_keys=True,
             use_jk_keys=False,
             use_emacs_keys=False,
@@ -355,6 +421,9 @@ def _read_value(prompt, *, password=False):
     """
     if not sys.stdin.isatty():
         return console.input(prompt, password=password)
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
     bindings = KeyBindings()
 
     @bindings.add(Keys.Escape, eager=True)
@@ -386,6 +455,41 @@ def text(label, default="", required=False, *, example=None):
         if value or not required:
             return value
         error("This field is required.")
+
+
+def ask(label, default="", *, parse=None, required=False, example=None,
+        catching=(ValueError, KeyError)):
+    """Prompt until `parse` accepts the value, keeping what was typed on retry."""
+    while True:
+        value = text(label, default, required=required, example=example)
+        try:
+            return value if parse is None else parse(value)
+        except catching as exc:
+            error(exc)
+            default = value
+
+
+def _parse_timezone(value):
+    try:
+        ZoneInfo(value)
+    except (KeyError, ValueError):
+        raise ValueError("Unknown IANA timezone.") from None
+    return value
+
+
+def _parse_keywords(value):
+    values = [keyword.strip() for keyword in value.split(",") if keyword.strip()]
+    if len(values) > 10:
+        raise ValueError("At most ten keywords are allowed.")
+    return values
+
+
+def _length_limited(limit):
+    def parse(value):
+        if limit and len(value) > limit:
+            raise ValueError(f"Maximum length is {limit} raw characters, including HTML and URLs.")
+        return value
+    return parse
 
 
 def secret(label):
@@ -573,14 +677,8 @@ def edit_field(data, field, episode=False):
         if field == "category" and data.get("subcategory") not in CATEGORIES.get(data[field], []):
             data["subcategory"] = ""
     elif field == "timezone":
-        while True:
-            value = text("IANA timezone (e.g. America/New_York)", current or "UTC", True)
-            try:
-                ZoneInfo(value)
-                data[field] = value
-                break
-            except (KeyError, ValueError):
-                error("Unknown IANA timezone.")
+        data[field] = ask("IANA timezone (e.g. America/New_York)", current or "UTC",
+                          required=True, parse=_parse_timezone)
     elif field == "artwork_url":
         data[field] = _artwork(current, episode)
     elif field == "podroll":
@@ -592,23 +690,14 @@ def edit_field(data, field, episode=False):
                              integer=field != "duration",
                              optional=field.endswith("_number"), positive=True)
     elif field == "keywords":
-        while True:
-            raw = text("Keywords (comma separated, maximum ten)", ", ".join(current or []))
-            values = [value.strip() for value in raw.split(",") if value.strip()]
-            if len(values) <= 10:
-                data[field] = values
-                break
-            error("At most ten keywords are allowed.")
+        data[field] = ask("Keywords (comma separated, maximum ten)",
+                          ", ".join(current or []), parse=_parse_keywords)
     else:
         limit = {"description": 4000}.get(field) if episode else None
-        while True:
-            value = text(label + (f" (maximum {limit} raw characters)" if limit else ""),
-                         current, required=field in ("title", "description", "mp3_url",
-                                                     "output_dir", "base_url"))
-            if not limit or len(value) <= limit:
-                data[field] = value
-                break
-            error(f"Maximum length is {limit} raw characters, including HTML and URLs.")
+        data[field] = ask(label + (f" (maximum {limit} raw characters)" if limit else ""),
+                          current, parse=_length_limited(limit),
+                          required=field in ("title", "description", "mp3_url",
+                                             "output_dir", "base_url"))
         if field == "mp3_url":
             if current != data[field]:
                 data["length"] = None
@@ -643,6 +732,18 @@ def edit_menu(data, fields, episode=False):
             missing_media_metadata(data)
 
 
+def _prompt_and_write_s3_keys(cfg_path, incomplete_message):
+    """Ask for both keys, write ~/.s3cfg at mode 0600, and confirm."""
+    from .s3deploy import write_s3cfg
+    access_key = secret("Access key")
+    secret_key = secret("Secret key")
+    if not access_key or not secret_key:
+        warning(incomplete_message)
+        return
+    write_s3cfg(access_key, secret_key)
+    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+
+
 def _ensure_s3_credentials():
     """Offer to create ~/.s3cfg on the spot when no S3 credentials are found.
 
@@ -652,7 +753,7 @@ def _ensure_s3_credentials():
     exists but is missing/invalid keys, it's left alone rather than silently
     overwritten: it may hold other hand-edited settings (host_base, etc).
     """
-    from .s3deploy import s3_credentials_present, s3cfg_path, write_s3cfg
+    from .s3deploy import s3_credentials_present, s3cfg_path
     if s3_credentials_present():
         return
     cfg_path = s3cfg_path()
@@ -663,13 +764,7 @@ def _ensure_s3_credentials():
         return
     if not confirm(f"No S3 credentials found. Create {cfg_path} now?", True):
         return
-    access_key = secret("Access key")
-    secret_key = secret("Secret key")
-    if not access_key or not secret_key:
-        warning("Both keys are required; skipping ~/.s3cfg setup.")
-        return
-    write_s3cfg(access_key, secret_key)
-    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+    _prompt_and_write_s3_keys(cfg_path, "Both keys are required; skipping ~/.s3cfg setup.")
 
 
 def set_s3_credentials():
@@ -679,7 +774,7 @@ def set_s3_credentials():
     file after confirmation) so an account with an outdated or read-only key can
     update it without hand-editing ~/.s3cfg.
     """
-    from .s3deploy import s3_credentials_present, s3cfg_path, write_s3cfg
+    from .s3deploy import s3_credentials_present, s3cfg_path
     cfg_path = s3cfg_path()
     if s3_credentials_present():
         console.print(f"Existing S3 credentials found in {cfg_path}.", markup=False)
@@ -690,13 +785,7 @@ def set_s3_credentials():
                 "take precedence over ~/.s3cfg.")
     if cfg_path.exists() and not confirm(f"Replace {cfg_path} with the keys you enter now?", True):
         return
-    access_key = secret("Access key")
-    secret_key = secret("Secret key")
-    if not access_key or not secret_key:
-        warning("Both keys are required; ~/.s3cfg was not changed.")
-        return
-    write_s3cfg(access_key, secret_key)
-    console.print(f"Wrote {cfg_path} (mode 600).", style=ACCENT)
+    _prompt_and_write_s3_keys(cfg_path, "Both keys are required; ~/.s3cfg was not changed.")
 
 
 def hosting_form(data):
@@ -806,9 +895,9 @@ def optional_assets(episode, show):
                 episode.setdefault("_replace_fields", []).append("chapters")
         elif action == 3:
             value = check_vtt(read_asset(text("VTT path or HTTPS URL", required=True)))
-            from .storage import asset_base, asset_root
+            from .storage import asset_root, asset_url
             filename = chapters_relative(episode).split("/", 1)[1]
-            url = asset_base(show) + "/transcripts/" + filename
+            url = asset_url(show, "transcripts/" + filename)
             console.print(f"On save: {asset_root(show)}/transcripts/{filename}\nPublic URL: {url}", markup=False)
             if confirm("Save this transcript with the episode?", False):
                 episode.update(transcript_url=url, _transcript_vtt=value)
@@ -826,26 +915,25 @@ def check_slug_collision(db, show_id, slug, exclude_guid=None):
             raise ValueError(f"Slug '{slug}' is already used by episode {episode['guid']}; choose another name")
 
 
+SLUG_PROMPT = "Slug (letters, numbers, hyphens, underscores)"
+
+
+def validated_slug(db, show_id, value, exclude_guid=None):
+    """Return `value` if it is a well-formed, unused slug; else raise ValueError."""
+    reason = slug_error(value)
+    if reason:
+        raise ValueError(f"Invalid slug: {reason}")
+    check_slug_collision(db, show_id, value, exclude_guid=exclude_guid)
+    return value
+
+
 def _choose_slug(db, show, episode, explicit_slug):
     if explicit_slug is not None:
-        reason = slug_error(explicit_slug)
-        if reason:
-            raise ValueError(f"Invalid slug: {reason}")
-        check_slug_collision(db, show["id"], explicit_slug)
-        return explicit_slug
+        return validated_slug(db, show["id"], explicit_slug)
     suggested = suggest_slug(episode)
     console.print(f"Suggested slug: {suggested}", style=ACCENT, markup=False)
-    while True:
-        value = text("Slug (letters, numbers, hyphens, underscores)", suggested, required=True)
-        reason = slug_error(value)
-        if reason:
-            error(f"Invalid slug: {reason}")
-            continue
-        try:
-            check_slug_collision(db, show["id"], value)
-            return value
-        except ValueError as exc:
-            error(exc)
+    return ask(SLUG_PROMPT, suggested, required=True,
+               parse=lambda value: validated_slug(db, show["id"], value))
 
 
 def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, image_preset=None,
@@ -856,7 +944,8 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
     Add episode action. Audio is required; artwork and transcript are optional.
     """
     from .media import identify_files, prepare_media
-    from .storage import asset_base
+    from .models import ASSET_ROLES
+    from .storage import asset_url
 
     roles = identify_files(files)
     audio_preset = audio_preset or show.get("audio_preset", "standard")
@@ -878,16 +967,13 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
                              keep_image=keep_image, progress=True)
     review("Prepared media", prepared.review())
     episode.update(slug=chosen_slug)
-    episode["mp3_url"] = asset_base(show) + "/" + prepared.audio_relative
     episode["length"] = prepared.audio_after
     episode["duration"] = prepared.audio_meta["duration"]
-    episode["audio_path"] = prepared.audio_relative
-    if prepared.image_relative:
-        episode["artwork_url"] = asset_base(show) + "/" + prepared.image_relative
-        episode["image_path"] = prepared.image_relative
-    if prepared.transcript_relative:
-        episode["transcript_url"] = asset_base(show) + "/" + prepared.transcript_relative
-        episode["transcript_path"] = prepared.transcript_relative
+    staged = (prepared.audio_relative, prepared.image_relative, prepared.transcript_relative)
+    for relative, (url_field, path_field) in zip(staged, ASSET_ROLES):
+        if relative:
+            episode[url_field] = asset_url(show, relative)
+            episode[path_field] = relative
 
     for field in ("title", "description"):
         try:
@@ -963,14 +1049,10 @@ def rename_form(db, show, publisher, saved):
                   "name automatically.", markup=False)
     others = [e for e in db.list_episodes(show["id"]) if e["guid"] != saved["guid"]]
     while True:
-        value = text("Slug (letters, numbers, hyphens, underscores)",
-                     _rename_default(db, show, saved), required=True)
-        reason = slug_error(value)
-        if reason:
-            error(f"Invalid slug: {reason}")
-            continue
+        value = ask(SLUG_PROMPT, _rename_default(db, show, saved), required=True,
+                    parse=lambda slug: validated_slug(db, show["id"], slug,
+                                                      exclude_guid=saved["guid"]))
         try:
-            check_slug_collision(db, show["id"], value, exclude_guid=saved["guid"])
             plan = plan_rename(show, saved, value, others=others)
         except ValueError as exc:
             error(exc)
@@ -1078,6 +1160,27 @@ def edit_episode_form(db, show, publisher, saved):
         return
 
 
+# Where each server keeps its per-site configuration, and how to find it.
+_SITE_CONFIG_HINTS = {
+    "Nginx": ("  /etc/nginx/sites-available/<domain>  or  /etc/nginx/conf.d/<domain>.conf\n"
+              "  Find it: sudo grep -R -n 'server_name {domain}' "
+              "/etc/nginx/sites-enabled /etc/nginx/conf.d"),
+    "Apache": ("  /etc/apache2/sites-available/<domain>.conf  or  /etc/httpd/conf.d/<domain>.conf\n"
+               "  Find it: sudo grep -R -n '{domain}' "
+               "/etc/apache2/sites-enabled /etc/httpd/conf.d"),
+}
+
+
+def _paste_fallback(snippet, path, border=ACCENT):
+    """Show the snippet to paste by hand when the automatic patch is declined
+    or fails, and name the file to open."""
+    console.print(Panel(snippet.rstrip(),
+                        title="Paste this into the server/Directory block with nano",
+                        border_style=border, expand=False))
+    console.print(f"nano {path}", markup=False)
+    return False
+
+
 def correct_host_mime(db, show):
     """Apply podcast MIME types to the site config, with a paste fallback."""
     from urllib.parse import urlsplit
@@ -1098,35 +1201,20 @@ def correct_host_mime(db, show):
                 "need object metadata or CDN changes instead.")
     console.print("Choose the site configuration file that serves this URL (the one with its "
                   "server_name/root, not the main nginx.conf). Common locations:", markup=False)
-    if name == "Nginx":
-        console.print("  /etc/nginx/sites-available/<domain>  or  /etc/nginx/conf.d/<domain>.conf\n"
-                      f"  Find it: sudo grep -R -n 'server_name {domain}' "
-                      "/etc/nginx/sites-enabled /etc/nginx/conf.d", markup=False)
-    else:
-        console.print("  /etc/apache2/sites-available/<domain>.conf  or  /etc/httpd/conf.d/<domain>.conf\n"
-                      f"  Find it: sudo grep -R -n '{domain}' "
-                      "/etc/apache2/sites-enabled /etc/httpd/conf.d", markup=False)
+    console.print(_SITE_CONFIG_HINTS[name].format(domain=domain), markup=False)
     path = text("Site configuration path", required=True)
     snippet = mime_snippet(name)
     console.print(Panel(snippet.rstrip(),
-                        title=f"MIME fix Termicast will add",
+                        title="MIME fix Termicast will add",
                         subtitle="application/rss+xml for the feed; application/json+chapters for chapters",
                         border_style=ACCENT, expand=False))
     if not confirm("Apply this to the configuration automatically?", True):
-        console.print(Panel(snippet.rstrip(),
-                            title="Paste this into the server/Directory block with nano",
-                            border_style=ACCENT, expand=False))
-        console.print(f"nano {path}", markup=False)
-        return False
+        return _paste_fallback(snippet, path)
     try:
         backup, changed = apply_mime_patch(name, path, servers[name])
     except (ValueError, RuntimeError) as exc:
         error(f"Could not apply the MIME fix: {exc}")
-        console.print(Panel(snippet.rstrip(),
-                            title="Paste this into the server/Directory block with nano",
-                            border_style="red", expand=False))
-        console.print(f"nano {path}", markup=False)
-        return False
+        return _paste_fallback(snippet, path, border="red")
     if changed:
         console.print(f"Configuration updated. Backup: {backup}", markup=False)
         console.print("Configuration syntax is valid.", style=ACCENT)
@@ -1145,73 +1233,88 @@ def correct_host_mime(db, show):
     return True
 
 
+HOSTING_OPTIONS = ["Configure hosting", "Deploy", "Deploy (dry run)",
+                   "Hosting checks (doctor)", "Nginx MIME snippet",
+                   "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
+                   "Migration guidance", "Back", "Correct host MIME types",
+                   "S3 credentials"]
+
+
 def hosting_menu(db, publisher, show):
-    """Hosting submenu: setup, deploy, checks, and guidance."""
-    from .hosting import doctor, nginx_snippet, apache_snippet, s3_write_policy_snippet
-    while True:
-        action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
-                                  "Hosting checks (doctor)", "Nginx MIME snippet",
-                                  "Apache MIME snippet", "S3 write-access policy (AWS IAM)",
-                                  "Migration guidance", "Back", "Correct host MIME types",
-                                  "S3 credentials"])
+    """Hosting submenu: setup, deploy, checks, and guidance.
+
+    "Back" is 9, with two options after it -- the numbering users know.
+    """
+    state = {"show": show}
+    run_menu("Hosting", HOSTING_OPTIONS,
+             lambda action: _hosting_action(db, publisher, state, action),
+             back=9,
+             cancelled="Cancelled. Hosting settings are unchanged.",
+             on_error=lambda action, exc: _hosting_error(db, state["show"], action, exc))
+
+
+def _hosting_action(db, publisher, state, action):
+    """Run one Hosting action; the caller reports failures."""
+    from .hosting import (apache_snippet, doctor, is_mime_problem, nginx_snippet,
+                          s3_write_policy_snippet, summarize_verification_problems)
+    show = state["show"]
+    if action == 1:
+        data = dict(show)
+        hosting_form(data)
+        if data.get("hosting") == "s3":
+            from .s3deploy import check_s3_access
+            check_s3_access(data)
+        db.save_show(data)
+        publisher.regenerate(show["id"])
+        state["show"] = data
+        console.print("Hosting settings saved.", style=ACCENT)
+    elif action == 2:
+        publisher.deploy(show["id"])
+        console.print(DEPLOYED, style=ACCENT)
+    elif action == 3:
+        publisher.deploy(show["id"], dry_run=True)
+        console.print(DRY_RUN_DONE, style=ACCENT)
+    elif action == 4:
+        problems = doctor(db, show["id"])
+        if problems:
+            for line in summarize_verification_problems(problems, target="mixed"):
+                warning(line)
+            if any(is_mime_problem(p) for p in problems):
+                _offer_mime_correction(db, show)
+        else:
+            console.print("No hosting problems found.", style=ACCENT)
+    elif action == 5:
+        console.print(nginx_snippet(show), markup=False)
+    elif action == 6:
+        console.print(apache_snippet(show), markup=False)
+    elif action == 7:
+        if show.get("hosting") != "s3":
+            warning("This show isn't using S3 hosting; no bucket policy applies.")
+        else:
+            console.print(s3_write_policy_snippet(show), markup=False)
+    elif action == 8:
+        from .migration import migration_guidance
+        console.print(migration_guidance(show), markup=False)
+    elif action == 10:
+        correct_host_mime(db, show)
+    elif action == 11:
+        set_s3_credentials()
+
+
+def _offer_mime_correction(db, show):
+    """Offer the guided host correction; declining is not an error."""
+    if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
+        correct_host_mime(db, show)
+
+
+def _hosting_error(db, show, action, exc):
+    """Report a failed hosting action, offering MIME repair after a deploy."""
+    from .hosting import is_mime_problem
+    error(f"Hosting action failed: {exc}")
+    if action == 2 and is_mime_problem(exc):
         try:
-            if action == 9:
-                return
-            if action == 1:
-                data = dict(show)
-                hosting_form(data)
-                if data.get("hosting") == "s3":
-                    from .s3deploy import check_s3_access
-                    check_s3_access(data)
-                db.save_show(data)
-                publisher.regenerate(show["id"])
-                show = data
-                console.print("Hosting settings saved.", style=ACCENT)
-            elif action == 2:
-                publisher.deploy(show["id"])
-                console.print("Deployed.", style=ACCENT)
-            elif action == 3:
-                publisher.deploy(show["id"], dry_run=True)
-                console.print("Dry run complete: no uploads or bucket probes were made.", style=ACCENT)
-            elif action == 4:
-                problems = doctor(db, show["id"])
-                if problems:
-                    from .hosting import summarize_verification_problems
-                    for line in summarize_verification_problems(problems, target="mixed"):
-                        warning(line)
-                    if any("Unexpected Content-Type " in p or "Missing Content-Type " in p
-                           for p in problems):
-                        if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
-                            correct_host_mime(db, show)
-                else:
-                    console.print("No hosting problems found.", style=ACCENT)
-            elif action == 5:
-                console.print(nginx_snippet(show), markup=False)
-            elif action == 6:
-                console.print(apache_snippet(show), markup=False)
-            elif action == 7:
-                if show.get("hosting") != "s3":
-                    warning("This show isn't using S3 hosting; no bucket policy applies.")
-                else:
-                    console.print(s3_write_policy_snippet(show), markup=False)
-            elif action == 8:
-                from .migration import migration_guidance
-                console.print(migration_guidance(show), markup=False)
-            elif action == 10:
-                correct_host_mime(db, show)
-            elif action == 11:
-                set_s3_credentials()
-        except ExitRequested:
-            raise
+            _offer_mime_correction(db, show)
         except Cancelled:
-            console.print("Cancelled. Hosting settings are unchanged.")
-        except Exception as exc:
-            error(f"Hosting action failed: {exc}")
-            if action == 2 and ("Unexpected Content-Type " in str(exc) or "Missing Content-Type " in str(exc)):
-                try:
-                    if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
-                        correct_host_mime(db, show)
-                except Cancelled:
-                    console.print("Correction cancelled.")
-                except Exception as repair_exc:
-                    error(f"MIME correction failed: {repair_exc}")
+            console.print("Correction cancelled.")
+        except Exception as repair_exc:
+            error(f"MIME correction failed: {repair_exc}")

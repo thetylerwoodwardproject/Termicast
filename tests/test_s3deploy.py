@@ -1,0 +1,483 @@
+import stat
+import subprocess
+from unittest.mock import Mock
+
+import pytest
+
+from termicast import s3deploy
+from termicast.models import new_show
+from termicast.s3deploy import (
+    object_key, s4cmd_args, upload_file, deploy_paths, remote_rename, check_s3_destination,
+    check_s3_access, s3_credentials_present, write_s3cfg, delete_prefix,
+)
+
+
+def s3_show(tmp_path):
+    output_dir = str(tmp_path / "out") if tmp_path else "/tmp/termicast-s3-test"
+    return new_show(
+        title="S3 show", description="d", base_url="https://cdn.example.org/show",
+        output_dir=output_dir, hosting="s3", endpoint_url="https://s3.example.org",
+        bucket="my-bucket", prefix="my-show", enabled=True,
+    )
+
+
+def test_object_key_with_and_without_prefix():
+    show = s3_show(None)
+    assert object_key(show, "audio/x.mp3") == "my-show/audio/x.mp3"
+    show["prefix"] = ""
+    assert object_key(show, "feed.xml") == "feed.xml"
+
+
+def test_s4cmd_args_include_controls_and_content_type():
+    show = s3_show(None)
+    args = s4cmd_args(show, "audio/mpeg")
+    assert args[1] == "put"
+    assert "s4cmd" in args[0]
+    assert "--endpoint-url" in args and "https://s3.example.org" in args
+    assert "--num-threads" in args and "2" in args
+    assert "--multipart-split-size" in args and str(16 * 1024 * 1024) in args
+    assert "--max-singlepart-upload-size" in args and str(64 * 1024 * 1024) in args
+    assert "--force" in args and "--sync-check" in args
+    assert "--API-ContentType" in args and "audio/mpeg" in args
+
+
+def test_s4cmd_args_omit_endpoint_for_aws():
+    show = s3_show(None)
+    show["endpoint_url"] = ""
+    assert "--endpoint-url" not in s4cmd_args(show, "audio/mpeg")
+
+
+def test_upload_file_runs_s4cmd(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    upload_file(show, local, "audio/x.mp3")
+    args = run.call_args.args[0]
+    assert args[-1] == "s3://my-bucket/my-show/audio/x.mp3"
+
+
+def test_upload_file_disables_s3_checksum_calculation(tmp_path, monkeypatch):
+    """Linode Object Storage rejects newer botocore's default S3 request
+    checksums with a generic AccessDenied on PutObject; s4cmd must run with
+    these opted back out."""
+    show = s3_show(tmp_path)
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    upload_file(show, local, "audio/x.mp3")
+    env = run.call_args.kwargs["env"]
+    assert env["AWS_REQUEST_CHECKSUM_CALCULATION"] == "when_required"
+    assert env["AWS_RESPONSE_CHECKSUM_VALIDATION"] == "when_required"
+
+
+def test_s4cmd_env_respects_operator_override(monkeypatch):
+    monkeypatch.setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_supported")
+    assert s3deploy._s4cmd_env()["AWS_REQUEST_CHECKSUM_CALCULATION"] == "when_supported"
+
+
+def test_upload_file_access_denied_includes_iam_policy_for_aws(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["endpoint_url"] = ""
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "AccessDenied on PutObject"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match='"s3:PutObject"'):
+        upload_file(show, local, "audio/x.mp3")
+
+
+def test_upload_file_access_denied_gives_generic_help_for_s3_compatible(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "AccessDenied on PutObject"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="storage provider's access key"):
+        upload_file(show, local, "audio/x.mp3")
+
+
+def test_upload_file_access_denied_describes_bucket_root_without_prefix(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["prefix"] = ""
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "AccessDenied on PutObject"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError) as excinfo:
+        upload_file(show, local, "audio/x.mp3")
+    message = str(excinfo.value)
+    assert "bucket root, no prefix" in message
+    assert "prefix ''" not in message
+    assert "prefix '/'" not in message
+
+
+def test_upload_file_non_permission_error_has_no_extra_help(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "no such bucket"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError) as excinfo:
+        upload_file(show, local, "audio/x.mp3")
+    assert "storage provider" not in str(excinfo.value)
+    assert "IAM" not in str(excinfo.value)
+
+
+def test_upload_file_rejects_unknown_content_type(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    (tmp_path / "out").mkdir(parents=True)
+    local = tmp_path / "out" / "weird.bin"
+    local.write_bytes(b"data")
+    with pytest.raises(ValueError, match="No Content-Type mapping"):
+        upload_file(show, local, "weird.bin")
+
+
+def test_deploy_paths_uploads_in_order(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "audio").mkdir(parents=True)
+    for relative in ("audio/x.mp3", "chapters/x.json"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"data")
+    uploaded = []
+    monkeypatch.setattr(s3deploy, "upload_file",
+                        lambda show, local, rel, dry_run=False, timeout=None: uploaded.append(rel))
+    deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
+    assert uploaded == ["audio/x.mp3", "chapters/x.json"]
+
+
+def test_remote_rename_runs_s4cmd_mv(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    remote_rename(show, "audio/old.mp3", "audio/new.mp3")
+    args = run.call_args.args[0]
+    assert args[1] == "mv"
+    assert "--endpoint-url" in args and "https://s3.example.org" in args
+    assert args[-2] == "s3://my-bucket/my-show/audio/old.mp3"
+    assert args[-1] == "s3://my-bucket/my-show/audio/new.mp3"
+
+
+def test_remote_rename_raises_on_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    run = Mock(return_value=subprocess.CompletedProcess([], 1, "", "no such key"))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="no such key"):
+        remote_rename(show, "audio/old.mp3", "audio/new.mp3")
+
+
+def test_check_s3_destination_passes_when_empty_and_writable(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(side_effect=[ok, ok, ok])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    check_s3_destination(show)
+    assert run.call_count == 3
+    assert run.call_args_list[0].args[0][1] == "ls"
+    assert run.call_args_list[1].args[0][1] == "put"
+    assert run.call_args_list[2].args[0][1] == "del"
+
+
+def test_check_s3_destination_rejects_nonempty_destination(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    nonempty = subprocess.CompletedProcess([], 0, "some/key\n", "")
+    run = Mock(return_value=nonempty)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(ValueError, match="already contains objects"):
+        check_s3_destination(show)
+    assert run.call_count == 1
+
+
+def test_check_s3_destination_fails_when_write_denied(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    empty = subprocess.CompletedProcess([], 0, "", "")
+    denied = subprocess.CompletedProcess([], 1, "", "AccessDenied on PutObject")
+    run = Mock(side_effect=[empty, denied])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="listable but not writable.*AccessDenied"):
+        check_s3_destination(show)
+
+
+def test_check_s3_destination_warns_when_probe_cleanup_fails(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    empty = subprocess.CompletedProcess([], 0, "", "")
+    put_ok = subprocess.CompletedProcess([], 0, "", "")
+    del_failed = subprocess.CompletedProcess([], 1, "", "no delete permission")
+    run = Mock(side_effect=[empty, put_ok, del_failed])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="could not remove it"):
+        check_s3_destination(show)
+
+
+def test_check_s3_destination_reports_listing_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    failed = subprocess.CompletedProcess([], 1, "", "Unable to locate credentials")
+    run = Mock(return_value=failed)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="Could not list the S3 destination.*Unable to locate credentials"):
+        check_s3_destination(show)
+    assert run.call_count == 1
+
+
+def test_check_s3_destination_uses_unique_probe_names(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    uploaded_keys = []
+    monkeypatch.setattr(s3deploy, "upload_file",
+                        lambda show, local, rel, dry_run=False, timeout=None: uploaded_keys.append(rel))
+    monkeypatch.setattr(s3deploy, "_run", Mock(return_value=ok))
+    check_s3_destination(show)
+    check_s3_destination(show)
+    assert len(uploaded_keys) == 2
+    assert uploaded_keys[0] != uploaded_keys[1]
+    assert all(key.startswith(".termicast-write-check-") and key.endswith(".txt")
+               for key in uploaded_keys)
+
+
+def test_check_s3_access_raises_without_credentials(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    monkeypatch.setattr(s3deploy, "s3cfg_path", lambda: tmp_path / "missing.s3cfg")
+    with pytest.raises(RuntimeError, match="credentials are not configured"):
+        check_s3_access(show)
+
+
+def test_check_s3_access_passes_with_credentials(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIA...")
+    monkeypatch.setenv("S3_SECRET_KEY", "shh")
+    check_s3_access(show)
+
+
+def test_deploy_paths_stops_on_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    for relative in ("audio/x.mp3", "chapters/x.json"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"data")
+
+    def fail(show, local, rel, dry_run=False, timeout=None):
+        if rel == "audio/x.mp3":
+            raise RuntimeError("upload failed")
+        return None
+
+    monkeypatch.setattr(s3deploy, "upload_file", fail)
+    with pytest.raises(RuntimeError, match="audio/x.mp3"):
+        deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
+
+
+def test_s3_credentials_present_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIA...")
+    monkeypatch.setenv("S3_SECRET_KEY", "shh")
+    assert s3_credentials_present(tmp_path / "missing.s3cfg") is True
+
+
+def test_s3_credentials_present_missing_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    assert s3_credentials_present(tmp_path / "missing.s3cfg") is False
+
+
+def test_s3_credentials_present_invalid_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    cfg = tmp_path / ".s3cfg"
+    cfg.write_text("not an ini file with a [default] section\n")
+    assert s3_credentials_present(cfg) is False
+
+
+def test_s3_credentials_present_valid_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    cfg = tmp_path / ".s3cfg"
+    write_s3cfg("AKIA...", "shh", path=cfg)
+    assert s3_credentials_present(cfg) is True
+
+
+def test_write_s3cfg_sets_owner_only_permissions(tmp_path):
+    cfg = tmp_path / ".s3cfg"
+    write_s3cfg("AKIA...", "shh", path=cfg)
+    assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+
+
+def test_write_s3cfg_content_is_readable_by_s3_credentials_present(tmp_path):
+    cfg = tmp_path / ".s3cfg"
+    write_s3cfg("my-access-key", "my-secret-key", path=cfg)
+    content = cfg.read_text()
+    assert "my-access-key" in content
+    assert "my-secret-key" in content
+    assert "[default]" in content
+
+
+def _with_credentials(monkeypatch):
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIA...")
+    monkeypatch.setenv("S3_SECRET_KEY", "shh")
+
+
+def test_delete_prefix_refuses_without_prefix(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["prefix"] = ""
+    run = Mock()
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(ValueError, match="no prefix"):
+        delete_prefix(show)
+    run.assert_not_called()
+
+
+def test_delete_prefix_allows_empty_prefix_when_confirmed(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["prefix"] = ""
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "a.mp3\n", "")
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(side_effect=[listing, ok])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show, allow_empty_prefix=True) == 1
+    assert run.call_count == 2
+    del_args = run.call_args_list[1].args[0]
+    assert del_args[-1] == "s3://my-bucket/"
+
+
+def test_delete_prefix_returns_zero_when_empty(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    empty = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(return_value=empty)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show) == 0
+    assert run.call_count == 1
+    assert run.call_args_list[0].args[0][1] == "ls"
+
+
+def test_delete_prefix_dry_run_lists_but_does_not_delete(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "my-show/audio/a.mp3\nmy-show/audio/b.mp3\n", "")
+    run = Mock(return_value=listing)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show, dry_run=True) == 2
+    assert run.call_count == 1
+
+
+def test_delete_prefix_deletes_recursively_when_nonempty(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "my-show/audio/a.mp3\n", "")
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(side_effect=[listing, ok])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show) == 1
+    assert run.call_count == 2
+    assert run.call_args_list[0].args[0][1] == "ls"
+    del_args = run.call_args_list[1].args[0]
+    assert del_args[1] == "del"
+    assert "--recursive" in del_args
+    assert "--endpoint-url" in del_args and "https://s3.example.org" in del_args
+    assert del_args[-1] == "s3://my-bucket/my-show/"
+
+
+def test_delete_prefix_reports_listing_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    failed = subprocess.CompletedProcess([], 1, "", "Unable to locate credentials")
+    run = Mock(return_value=failed)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="Could not list.*Unable to locate credentials"):
+        delete_prefix(show)
+
+
+def test_delete_prefix_raises_on_delete_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "my-show/audio/a.mp3\n", "")
+    denied = subprocess.CompletedProcess([], 1, "", "AccessDenied")
+    run = Mock(side_effect=[listing, denied])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="s4cmd delete failed.*AccessDenied"):
+        delete_prefix(show)
+
+
+def test_batches_group_by_folder_and_content_type():
+    """s4cmd joins basenames onto the target, so a batch needs one folder.
+
+    --API-ContentType also applies to the whole invocation, so a folder
+    holding both JPEG and PNG artwork has to split into two runs.
+    """
+    grouped = s3deploy.batches([
+        "audio/a.mp3", "audio/b.mp3",
+        "images/episodes/a.jpg", "images/episodes/b.png",
+        "chapters/a.json",
+    ])
+    assert grouped[("audio", "audio/mpeg")] == ["audio/a.mp3", "audio/b.mp3"]
+    assert grouped[("images/episodes", "image/jpeg")] == ["images/episodes/a.jpg"]
+    assert grouped[("images/episodes", "image/png")] == ["images/episodes/b.png"]
+    assert grouped[("chapters", "application/json+chapters")] == ["chapters/a.json"]
+
+
+def test_batches_reject_unmappable_content_type():
+    with pytest.raises(ValueError, match="No Content-Type mapping"):
+        s3deploy.batches(["audio/x.bin"])
+
+
+def test_upload_batch_sends_one_process_per_folder(tmp_path, monkeypatch):
+    """The whole point: one s4cmd process for a folder, not one per file."""
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "audio").mkdir(parents=True)
+    for name in ("a.mp3", "b.mp3", "c.mp3"):
+        (root / "audio" / name).write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+
+    s3deploy.upload_batch(show, root, ["audio/a.mp3", "audio/b.mp3", "audio/c.mp3"], "audio/mpeg")
+
+    assert run.call_count == 1
+    args = run.call_args.args[0]
+    # Trailing slash is required, or s4cmd refuses a multi-source put.
+    assert args[-1] == "s3://my-bucket/my-show/audio/"
+    assert args[-4:-1] == [str(root / "audio" / name) for name in ("a.mp3", "b.mp3", "c.mp3")]
+    assert "--API-ContentType" in args and "audio/mpeg" in args
+
+
+def test_upload_batch_of_one_keeps_the_exact_object_key(tmp_path, monkeypatch):
+    """A single file still gets its full key, not a directory-plus-basename."""
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "chapters").mkdir(parents=True)
+    (root / "chapters" / "a.json").write_bytes(b"{}")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+
+    s3deploy.upload_batch(show, root, ["chapters/a.json"], "application/json+chapters")
+    assert run.call_args.args[0][-1] == "s3://my-bucket/my-show/chapters/a.json"
+
+
+def test_upload_batch_reports_nothing_uploaded_when_the_batch_fails(tmp_path, monkeypatch):
+    """A partly-failed batch must not be reported as uploaded.
+
+    upload_existing_assets deletes local copies of what deploy_paths says it
+    uploaded, so crediting a failed batch would delete media that never
+    reached the bucket.
+    """
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "audio").mkdir(parents=True)
+    for name in ("a.mp3", "b.mp3"):
+        (root / "audio" / name).write_bytes(b"data")
+    monkeypatch.setattr(s3deploy, "subprocess",
+                        Mock(run=Mock(return_value=subprocess.CompletedProcess([], 1, "", "boom")),
+                             DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="audio/a.mp3, audio/b.mp3"):
+        deploy_paths(show, ["audio/a.mp3", "audio/b.mp3"], source_root=root, verify=False)

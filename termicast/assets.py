@@ -29,18 +29,4 @@ def check_vtt(value):
 
 
 def read_chapters(source, episode):
-    payload = json.loads(read_asset(source))
-    if not isinstance(payload, dict):
-        raise ValueError("Chapter JSON must be an object")
-    chapters = payload.get("chapters")
-    if not isinstance(chapters, list) or not chapters:
-        raise ValueError("Chapter JSON requires a nonempty chapters array")
-    if any(not isinstance(chapter, dict) or "startTime" not in chapter for chapter in chapters):
-        raise ValueError("Each chapter must be an object with startTime")
-    for index, chapter in enumerate(chapters):
-        chapter.setdefault("endTime", chapters[index + 1]["startTime"]
-                           if index + 1 < len(chapters) else episode["duration"])
-    errors = validation.validate_episode(dict(episode, chapters=chapters))
-    if errors:
-        raise ValueError("; ".join(errors))
-    return chapters
+    return validation.validate_chapter_payload(json.loads(read_asset(source)), episode)

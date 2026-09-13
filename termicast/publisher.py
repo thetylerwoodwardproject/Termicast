@@ -15,7 +15,7 @@ from .database import filesystem_lock
 from .feed import render_feed
 from .validation import validate_episode
 from .models import ASSET_ROLES, chapters_relative, transcript_relative
-from .storage import asset_root, asset_base, local_relative
+from .storage import asset_root, asset_base, asset_url, local_relative
 
 
 def fsync_dir(path):
@@ -46,11 +46,11 @@ def atomic_write(path, data, mode=0o644):
 
 
 def operation_lock(show):
-    return filesystem_lock(Path(show["output_dir"]) / ".termicast.oplock")
+    return filesystem_lock(asset_root(show) / ".termicast.oplock")
 
 
 def output_lock(show):
-    return filesystem_lock(Path(show["output_dir"]) / ".termicast.lock")
+    return filesystem_lock(asset_root(show) / ".termicast.lock")
 
 
 def episode_asset_paths(episode, show=None):
@@ -82,15 +82,21 @@ def episode_asset_paths(episode, show=None):
     return paths
 
 
-def _verify_published_assets(show, episodes):
+def _verified_urls(show, relative_paths):
+    """Public URLs that deploy_paths already verified for these uploads."""
+    base = asset_base(show)
+    return {f"{base}/{relative}" for relative in relative_paths}
+
+
+def _verify_published_assets(show, episodes, skip=()):
     """Fail loudly if any published episode's assets aren't publicly reachable.
 
-    A deploy that silently skips an asset type would otherwise report success;
-    this re-checks the full published set (not just the files this call
-    uploaded) so such a gap surfaces immediately.
+    Checks the full published set, not just what this call uploaded, so an
+    asset type the deploy silently skipped still surfaces. `skip` carries the
+    URLs the upload already verified.
     """
     from .hosting import check_assets, summarize_verification_problems
-    problems = check_assets(show, episodes)
+    problems = check_assets(show, episodes, skip=skip)
     if problems:
         raise RuntimeError("\n".join(summarize_verification_problems(problems, target="s3")))
 
@@ -142,8 +148,7 @@ class Publisher:
         episode = dict(episode, published_at=target)
         due = when is None or datetime.fromisoformat(target) <= now
         with self.db.lock():
-            if self.db.get_show(show_id) is None:
-                raise ValueError("Unknown podcast ID")
+            self.db.require_show(show_id)
             with self.db.connection() as conn:
                 existing = conn.execute("SELECT * FROM episodes WHERE show_id=? AND guid = ?", (show_id, episode["guid"])).fetchone()
                 if existing:
@@ -169,9 +174,7 @@ class Publisher:
         """
         now = datetime.now(timezone.utc)
         with self.db.lock():
-            show = self.db.get_show(show_id)
-            if show is None:
-                raise ValueError("Unknown podcast ID")
+            show = self.db.require_show(show_id)
             existing = {e["guid"]: e for e in self.db.list_episodes(show_id)}
             if callable(episodes):
                 episodes = episodes(existing, show)
@@ -245,10 +248,8 @@ class Publisher:
         show's `mirror_feed` setting is on, a copy is additionally uploaded to
         the bucket after the media assets succeed.
         """
-        show = self.db.get_show(show_id)
-        if show is None:
-            raise ValueError("Unknown podcast ID")
-        Path(show["output_dir"]).expanduser().absolute().mkdir(parents=True, exist_ok=True)
+        show = self.db.require_show(show_id)
+        asset_root(show).mkdir(parents=True, exist_ok=True)
         with operation_lock(show):
             with self.db.lock():
                 episodes = [e for e in self.db.list_episodes(show_id) if e["status"] == "published"]
@@ -270,7 +271,7 @@ class Publisher:
                 if show.get("mirror_feed"):
                     uploaded = list(uploaded) + list(mirror_feed(show, dry_run=dry_run, verify=verify))
                 if verify and not dry_run:
-                    _verify_published_assets(show, episodes)
+                    _verify_published_assets(show, episodes, skip=_verified_urls(show, uploaded))
                 return uploaded
             feed = asset_root(show) / "feed.xml"
             if not feed.is_file():
@@ -278,9 +279,9 @@ class Publisher:
             if verify and not dry_run:
                 from .hosting import check_url
                 from .media import content_type_for
-                problems = list(check_url(asset_base(show) + "/feed.xml", "application/rss+xml"))
+                problems = list(check_url(asset_url(show, "feed.xml"), "application/rss+xml"))
                 for relative in sorted(assets):
-                    problems.extend(check_url(asset_base(show) + "/" + relative, content_type_for(relative)))
+                    problems.extend(check_url(asset_url(show, relative), content_type_for(relative)))
                 if problems:
                     from .hosting import summarize_verification_problems
                     raise RuntimeError("\n".join(summarize_verification_problems(problems, target="local")))
@@ -304,10 +305,8 @@ class Publisher:
 
     def _write(self, show_id, now, include_due, release_guids=()):
         with self.db.lock():
-            show = self.db.get_show(show_id)
-            if show is None:
-                raise ValueError("Unknown podcast ID")
-        Path(show["output_dir"]).expanduser().absolute().mkdir(parents=True, exist_ok=True)
+            show = self.db.require_show(show_id)
+        asset_root(show).mkdir(parents=True, exist_ok=True)
         with operation_lock(show):
             with self.db.lock():
                 snapshot = self._snapshot(show_id, now, include_due, release_guids)
@@ -318,7 +317,7 @@ class Publisher:
             if show.get("hosting") == "s3" and show.get("enabled"):
                 self._deploy_remote(snapshot, show)
             with output_lock(show):
-                atomic_write(Path(show["output_dir"]) / "feed.xml", snapshot["data"])
+                atomic_write(asset_root(show) / "feed.xml", snapshot["data"])
             if show.get("hosting") == "s3" and show.get("enabled") and show.get("mirror_feed"):
                 try:
                     mirror_feed(show)
@@ -360,11 +359,11 @@ class Publisher:
             root = asset_root(show)
             if any((root / relative).is_file() for relative in paths):
                 check_s3_access(show)
-            upload_existing_assets(show, sorted(paths))
+            uploaded = upload_existing_assets(show, sorted(paths))
             published = [dict(json.loads(row["data"]), status=row["status"])
                          for row in snapshot["selected"] if row["status"] == "published"]
             if published:
-                _verify_published_assets(show, published)
+                _verify_published_assets(show, published, skip=_verified_urls(show, uploaded))
         except Exception as exc:
             raise RuntimeError(
                 f"Saved locally. Remote publication failed: {exc}. "
