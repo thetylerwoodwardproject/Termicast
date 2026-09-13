@@ -240,3 +240,50 @@ def test_import_naming_renames_chapter_images(tmp_path):
     assert episode["chapters"][1]["img"] == "https://new.example.org/show/images/chapters/ep001-02.jpg"
     assert (tmp_path / "out" / "images" / "chapters" / "ep001-01.jpg").is_file()
     assert (tmp_path / "out" / "images" / "chapters" / "ep001-02.jpg").is_file()
+
+
+def test_import_refuses_to_overwrite_slug_named_chapter_json(tmp_path, monkeypatch):
+    """A slug-named chapter file already on disk blocks the import.
+
+    Chapter JSON lands at `chapters/<slug>.json` once a naming scheme is
+    applied, so an existing file under that name must stop the import rather
+    than be overwritten. Pins the invariant that the pre-import destination
+    checks cover the paths the publisher actually writes.
+    """
+    from termicast import importer, s3deploy
+
+    feed = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"'
+        ' xmlns:psc="http://podlove.org/simple-chapters">'
+        '<channel><title>S</title><description>d</description><link>https://old.example.org</link>'
+        '<item><title>Ep</title><guid isPermaLink="false">ep-1</guid><description>d</description>'
+        '<enclosure url="https://old.example.org/audio/ep1.mp3" length="1234" type="audio/mpeg"/>'
+        '<pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>'
+        '<itunes:duration>60</itunes:duration>'
+        '<psc:chapters version="1.2">'
+        '<psc:chapter start="00:00:00.000" title="First"/>'
+        '</psc:chapters>'
+        '</item></channel></rss>'
+    ).encode()
+
+    src = tmp_path / "src"
+    src.mkdir()
+    audio = src / "ep1.mp3"
+    audio.write_bytes(b"fake-audio")
+
+    output = tmp_path / "out"
+    (output / "chapters").mkdir(parents=True)
+    occupied = output / "chapters" / "ep001.json"
+    occupied.write_text("pre-existing", encoding="utf-8")
+
+    monkeypatch.setattr(s3deploy, "check_s3_destination", lambda s: None)
+    show = new_show(title="S", description="d", base_url="https://new.example.org/show",
+                    output_dir=str(output), hosting="s3", bucket="b", prefix="p",
+                    asset_base_url="https://cdn.example.org/show")
+    preseed = {"https://old.example.org/audio/ep1.mp3": (str(audio), "audio/ep1.mp3")}
+
+    with pytest.raises(ValueError, match="ep001"):
+        importer.download_import(show, feed, preseed=preseed,
+                                 require_preseed=True, naming="ep")
+    assert occupied.read_text(encoding="utf-8") == "pre-existing"

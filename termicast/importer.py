@@ -13,7 +13,8 @@ import shutil
 import tempfile
 
 from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
-from .models import ASSET_ROLES, new_episode, plan_slugs
+from .models import (ASSET_ROLES, chapters_relative, new_episode, plan_slugs,
+                     transcript_relative)
 from .publisher import atomic_write, fsync_dir
 from .validation import _HTTPSRedirectHandler
 from . import validation
@@ -539,9 +540,8 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             if errors:
                 raise ValueError("; ".join(errors))
         files = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file())
-        from .models import chapter_filename
-        generated = ["chapters/" + chapter_filename(e["guid"]) for e in episodes if e.get("chapters")]
-        generated += ["transcripts/" + chapter_filename(e["guid"]) + ".vtt" for e in episodes if e.get("_transcript_vtt")]
+        generated = [chapters_relative(e) for e in episodes if e.get("chapters")]
+        generated += [transcript_relative(e) for e in episodes if e.get("_transcript_vtt")]
         collisions = []
         for relative in set(files + generated):
             target = assets / relative
