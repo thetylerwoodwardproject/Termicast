@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
+from functools import lru_cache
 import math
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -37,11 +38,40 @@ def op3_url(show, mp3_url):
     return mp3_url
 
 
+@lru_cache(maxsize=None)
 def _tag(name):
+    """Expand a prefixed name to Clark notation.
+
+    Called tens of thousands of times per render (once per element built,
+    per episode), always over the same small vocabulary.
+    """
     if ":" in name:
         prefix, local = name.split(":", 1)
         return f"{{{NS[prefix]}}}{local}"
     return name
+
+
+# Which XML elements each episode field owns. Rebuilding this inside the
+# per-item loop meant constructing a 16-entry dict and re-expanding ~20 tag
+# names for every episode in the feed.
+#
+# Worth doing, but not a hot spot: controlled A/B puts the whole hoist plus
+# the _tag cache at ~3% of render_feed for a 500-episode show (medians
+# overlap; only the minima separate). A profiler had suggested far more,
+# which was its own overhead on cheap Python calls -- the real cost here is
+# lxml's. Don't reach for this file expecting large wins.
+_REPLACE_TAGS = {
+    key: tuple(_tag(tag) for tag in tags) for key, tags in {
+        "title": ("title",), "description": ("description", "content:encoded"),
+        "link": ("link",), "mp3_url": ("enclosure",), "length": ("enclosure",),
+        "published_at": ("pubDate",), "duration": ("itunes:duration",),
+        "episode_type": ("itunes:episodeType",), "explicit": ("itunes:explicit",),
+        "episode_number": ("itunes:episode",), "season_number": ("itunes:season",),
+        "artwork_url": ("itunes:image", "image"), "transcript_url": ("podcast:transcript",),
+        "keywords": ("itunes:keywords",), "soundbites": ("podcast:soundbite",),
+        "chapters": ("podcast:chapters", "psc:chapters"),
+    }.items()
+}
 
 
 def _parse_xml(data):
@@ -263,17 +293,9 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
             if original_item.find("guid") is None:
                 _put(original_item, "guid", guid, isPermaLink="false")
             baseline = extract_episode(original_item)
-            groups = {
-                "title": ("title",), "description": ("description", "content:encoded"),
-                "link": ("link",), "mp3_url": ("enclosure",), "length": ("enclosure",),
-                "published_at": ("pubDate",), "duration": ("itunes:duration",),
-                "episode_type": ("itunes:episodeType",), "explicit": ("itunes:explicit",),
-                "episode_number": ("itunes:episode",), "season_number": ("itunes:season",),
-                "artwork_url": ("itunes:image", "image"), "transcript_url": ("podcast:transcript",),
-                "keywords": ("itunes:keywords",), "soundbites": ("podcast:soundbite",),
-                "chapters": ("podcast:chapters", "psc:chapters"),
-            }
-            replaced = {_tag(tag) for key, tags in groups.items() if episode.get(key) != baseline.get(key) or key in episode.get("_replace_fields", [])
+            forced = episode.get("_replace_fields", [])
+            replaced = {tag for key, tags in _REPLACE_TAGS.items()
+                        if episode.get(key) != baseline.get(key) or key in forced
                         for tag in tags}
             if show.get("op3") and episode.get("mp3_url"):
                 replaced.add(_tag("enclosure"))
