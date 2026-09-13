@@ -43,12 +43,14 @@ def validate_slug(slug) -> bool:
     return slug_error(slug) is None
 
 
-def numbered_slug(episode, position=None, *, seasons=True, default_season=None) -> str:
+def numbered_slug(episode, position=None, *, seasons=True, default_season=None, word="ep") -> str:
     """Sequential, human-readable name: s01ep001 with a season, ep001 without.
 
     `position` is the episode's one-based place in the show, used when the feed
     declares no episode number. `default_season` names a season for episodes
     that declare none, so a show asked for the s01ep001 style stays consistent.
+    `word` is the naming scheme's word ("ep" by default; scheme_slug and
+    suggest_slug pass "bonus"/"trailer" for those episode types).
     The padding is a minimum, so a show that passes 999 episodes simply grows
     to ep1000 rather than colliding.
     """
@@ -63,31 +65,64 @@ def numbered_slug(episode, position=None, *, seasons=True, default_season=None) 
         if season is None:
             season = default_season
     prefix = f"s{int(season):02d}" if season is not None else ""
-    return f"{prefix}ep{int(number):03d}"
+    return f"{prefix}{word}{int(number):03d}"
 
 
 def scheme_slug(episode, scheme, *, position=None, fallback="position") -> str:
-    """Name `episode` under a naming scheme; "" means keep its current name."""
+    """Name `episode` under a naming scheme; "" means keep its current name.
+
+    Bonus and trailer episodes always get their own word ("bonus001",
+    "trailer001") and never a season prefix, regardless of `scheme`; only
+    "full" episodes (the default when episode_type is unset) follow the
+    ep/sep choice `scheme` names.
+    """
     if scheme not in NAMING_SCHEMES:
         raise ValueError(f"Naming scheme must be one of {', '.join(NAMING_SCHEMES)}")
     if episode.get("episode_number") is None and (fallback != "position" or position is None):
         return ""
+    episode_type = episode.get("episode_type") or "full"
+    if episode_type in ("bonus", "trailer"):
+        return numbered_slug(episode, position, seasons=False, word=episode_type)
     return numbered_slug(episode, position, seasons=scheme == "sep",
                          default_season=1 if scheme == "sep" else None)
 
 
+def positions_by_type(episodes) -> dict:
+    """Map {guid: position}, numbering each episode_type's episodes independently.
+
+    Full episodes, bonus episodes, and trailers each get their own 1-based
+    counter, oldest published first, breaking ties by the episodes' original
+    list order. A missing/None episode_type counts as "full", so a show with
+    no bonus/trailer episodes gets the single global ordering plan_slugs used
+    before this helper existed.
+    """
+    groups = {}
+    for index, episode in enumerate(episodes):
+        episode_type = episode.get("episode_type") or "full"
+        groups.setdefault(episode_type, []).append(index)
+    positions = {}
+    for indexes in groups.values():
+        order = sorted(indexes, key=lambda index: (episodes[index].get("published_at") or "", -index))
+        for position, index in enumerate(order, 1):
+            positions[episodes[index]["guid"]] = position
+    return positions
+
+
 def plan_slugs(episodes, scheme, fallback="position") -> dict:
-    """Map {guid: slug} for a whole show, numbering oldest first.
+    """Map {guid: slug} for a whole show, numbering each episode_type oldest first.
 
     `fallback` decides what happens to episodes the feed leaves unnumbered:
     "position" numbers them by publication order, "keep" leaves their file
     names alone, and "renumber" ignores the feed's episode numbers entirely
-    and numbers every episode by publication order.
+    and numbers every episode by publication order. Full, bonus, and trailer
+    episodes are numbered independently (see positions_by_type), so a bonus
+    episode becomes "bonus001" without disturbing the full episodes' "ep001"
+    sequence.
 
     Episodes the scheme cannot name are absent from the result. Raises when
     two episodes would claim one name, which happens when a feed repeats an
-    episode number (a numbered trailer, or seasons that omit itunes:season);
-    the caller offers another scheme.
+    episode number within the same episode_type (a numbered trailer, or
+    seasons that omit itunes:season); the caller offers another scheme.
     """
     if fallback not in NAMING_FALLBACKS:
         raise ValueError(f"Naming fallback must be one of {', '.join(NAMING_FALLBACKS)}")
@@ -95,12 +130,10 @@ def plan_slugs(episodes, scheme, fallback="position") -> dict:
         episodes = [dict(episode, episode_number=None, season_number=None)
                     for episode in episodes]
         fallback = "position"
-    order = sorted(range(len(episodes)),
-                   key=lambda index: (episodes[index].get("published_at") or "", -index))
+    positions = positions_by_type(episodes)
     slugs = {}
-    for position, index in enumerate(order, 1):
-        episode = episodes[index]
-        slug = scheme_slug(episode, scheme, position=position, fallback=fallback)
+    for episode in episodes:
+        slug = scheme_slug(episode, scheme, position=positions.get(episode["guid"]), fallback=fallback)
         if slug:
             slugs[episode["guid"]] = slug
     taken = {}
@@ -119,9 +152,12 @@ def plan_slugs(episodes, scheme, fallback="position") -> dict:
 
 def suggest_slug(episode) -> str:
     """Suggest an editorial slug from season/number, else the episode GUID."""
-    if episode.get("episode_number") is not None:
-        return numbered_slug(episode)
-    return str(episode.get("guid") or uuid4())
+    if episode.get("episode_number") is None:
+        return str(episode.get("guid") or uuid4())
+    episode_type = episode.get("episode_type") or "full"
+    if episode_type in ("bonus", "trailer"):
+        return numbered_slug(episode, seasons=False, word=episode_type)
+    return numbered_slug(episode)
 
 
 def chapters_relative(episode) -> str:

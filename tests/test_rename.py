@@ -343,6 +343,18 @@ def test_rename_form_renames_on_confirmation(db, show, episode, monkeypatch):
     assert db.list_episodes(show["id"])[0]["slug"] == "ep001"
 
 
+def test_rename_default_positions_bonus_and_trailer_independently(db, show):
+    from termicast import prompts
+    full1 = new_episode(guid="full-1", episode_number=1, published_at="2024-01-01T00:00:00+00:00")
+    bonus1 = new_episode(guid="bonus-1", episode_type="bonus", published_at="2024-01-02T00:00:00+00:00")
+    full2 = new_episode(guid="full-2", episode_number=2, published_at="2024-01-03T00:00:00+00:00")
+    bonus2 = new_episode(guid="bonus-2", episode_type="bonus", published_at="2024-01-04T00:00:00+00:00")
+    db.save_show(show, episodes=[full1, bonus1, full2, bonus2])
+    saved = next(e for e in db.list_episodes(show["id"]) if e["guid"] == "bonus-2")
+    # bonus-2 is the show's 4th episode overall, but only the 2nd bonus episode.
+    assert prompts._rename_default(db, show, saved) == "bonus002"
+
+
 def test_editor_requires_a_clean_buffer_before_renaming(db, show, episode, monkeypatch, capsys):
     """Renaming persists immediately, so unsaved edits must be resolved first."""
     from termicast import prompts

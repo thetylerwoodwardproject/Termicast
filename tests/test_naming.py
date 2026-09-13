@@ -5,7 +5,7 @@ import json
 import pytest
 
 from termicast.archive import archive_identity, import_archive
-from termicast.models import new_show, plan_slugs, scheme_slug, suggest_slug
+from termicast.models import new_show, plan_slugs, positions_by_type, scheme_slug, suggest_slug
 
 from test_archive import make_archive
 
@@ -70,6 +70,72 @@ def test_plan_slugs_rejects_duplicate_names():
         plan_slugs(episodes, "ep")
     # The season-aware scheme separates them.
     assert plan_slugs(episodes, "sep") == {"a": "s01ep001", "b": "s02ep001"}
+
+
+def test_scheme_slug_bonus_and_trailer_drop_season():
+    assert scheme_slug({"episode_number": 2, "episode_type": "bonus"}, "ep") == "bonus002"
+    assert scheme_slug({"episode_number": 2, "episode_type": "bonus"}, "sep") == "bonus002"
+    assert scheme_slug({"episode_number": 1, "episode_type": "trailer",
+                        "season_number": 3}, "sep") == "trailer001"
+    assert scheme_slug({"episode_type": "bonus"}, "ep", position=5) == "bonus005"
+    assert scheme_slug({"episode_type": "trailer"}, "sep", position=1) == "trailer001"
+
+
+def test_scheme_slug_bonus_without_number_or_position_is_skipped():
+    assert scheme_slug({"episode_type": "bonus"}, "ep") == ""
+    assert scheme_slug({"episode_type": "trailer"}, "ep", fallback="keep", position=3) == ""
+
+
+def test_plan_slugs_numbers_each_episode_type_independently():
+    episodes = [
+        {"guid": "trailer", "episode_type": "trailer",
+         "published_at": "2023-12-01T00:00:00+00:00"},
+        {"guid": "full-1", "episode_number": 1,
+         "published_at": "2024-01-01T00:00:00+00:00"},
+        {"guid": "full-2", "episode_number": 2,
+         "published_at": "2024-01-08T00:00:00+00:00"},
+        {"guid": "bonus", "episode_type": "bonus",
+         "published_at": "2024-01-10T00:00:00+00:00"},
+        {"guid": "full-3", "episode_number": 3,
+         "published_at": "2024-01-15T00:00:00+00:00"},
+    ]
+    assert plan_slugs(episodes, "ep") == {
+        "trailer": "trailer001",
+        "full-1": "ep001",
+        "full-2": "ep002",
+        "bonus": "bonus001",
+        "full-3": "ep003",
+    }
+
+
+def test_plan_slugs_rejects_duplicate_names_within_a_type():
+    episodes = [{"guid": "a", "episode_type": "bonus", "episode_number": 1},
+                {"guid": "b", "episode_type": "bonus", "episode_number": 1}]
+    with pytest.raises(ValueError, match="named the same"):
+        plan_slugs(episodes, "ep")
+    # Bonus/trailer never take a season prefix, so "sep" doesn't disambiguate them either.
+    with pytest.raises(ValueError, match="named the same"):
+        plan_slugs(episodes, "sep")
+
+
+def test_suggest_slug_bonus_and_trailer():
+    assert suggest_slug({"episode_number": 2, "episode_type": "bonus"}) == "bonus002"
+    assert suggest_slug({"episode_number": 1, "episode_type": "trailer",
+                         "season_number": 4}) == "trailer001"
+
+
+def test_suggest_slug_bonus_without_number_falls_back_to_guid():
+    assert suggest_slug({"episode_type": "bonus", "guid": "abc"}) == "abc"
+
+
+def test_positions_by_type_groups_independently():
+    episodes = [
+        {"guid": "t1", "episode_type": "trailer", "published_at": "2024-01-01T00:00:00+00:00"},
+        {"guid": "f1", "published_at": "2024-01-02T00:00:00+00:00"},
+        {"guid": "b1", "episode_type": "bonus", "published_at": "2024-01-03T00:00:00+00:00"},
+        {"guid": "f2", "published_at": "2024-01-04T00:00:00+00:00"},
+    ]
+    assert positions_by_type(episodes) == {"t1": 1, "f1": 1, "b1": 1, "f2": 2}
 
 
 # --- import-time naming ---------------------------------------------------

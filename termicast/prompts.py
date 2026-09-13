@@ -20,7 +20,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .models import (new_episode, new_show, scheme_slug, slug_error, suggest_slug)
+from .models import (new_episode, new_show, positions_by_type, scheme_slug, slug_error, suggest_slug)
 from .faq import FAQ
 from .validation import (
     CATEGORIES, inspect_artwork, local_to_utc, parse_time, probe_media,
@@ -951,10 +951,7 @@ def _rename_default(db, show, saved):
     if saved.get("slug"):
         return saved["slug"]
     scheme = "sep" if saved.get("season_number") is not None else "ep"
-    episodes = sorted(db.list_episodes(show["id"]),
-                      key=lambda e: e.get("published_at") or "")
-    position = next((index for index, e in enumerate(episodes, 1)
-                     if e["guid"] == saved["guid"]), len(episodes) + 1)
+    position = positions_by_type(db.list_episodes(show["id"])).get(saved["guid"])
     return scheme_slug(saved, scheme, position=position) or ""
 
 
