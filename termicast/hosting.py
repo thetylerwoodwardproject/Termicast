@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from .storage import asset_base, asset_root, feed_url
 
 
-def _head_or_range(url, expected_content_type=None):
+def _head_or_range(url):
     """Return (status, content_type, body) using HEAD, falling back to a ranged GET."""
     from . import validation
     try:

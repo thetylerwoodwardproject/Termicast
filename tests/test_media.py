@@ -113,3 +113,25 @@ def test_keep_image_preserves_png(tmp_path):
     _, relative, _, _, dims, note = _prepare_image(source, dest / "images", "s01e001", "compact", True)
     assert relative == "images/s01e001.png"
     assert dims == (1400, 1400)
+
+
+def test_prepared_review_reports_how_media_was_handled(tmp_path):
+    """The audio/image notes are computed during preparation, so show them.
+
+    Without these the review panel says what the output is but not what was
+    done to get there -- converted, passed through, or kept as the original.
+    """
+    from termicast.media import Prepared
+
+    prepared = Prepared(
+        audio_path=tmp_path / "a.mp3", audio_relative="audio/a.mp3",
+        audio_before=200, audio_after=100,
+        audio_meta={"codec": "mp3", "sample_rate": 44100, "channels": 2, "duration": 1.0},
+        audio_note="converted to MP3 128 kbps / 44100 Hz",
+        image_path=tmp_path / "a.jpg", image_relative="images/episodes/a.jpg",
+        image_before=300, image_after=150, image_note="kept original artwork",
+        image_dims=(1400, 1400),
+    )
+    review = prepared.review()
+    assert review["audio_handling"] == "converted to MP3 128 kbps / 44100 Hz"
+    assert review["image_handling"] == "kept original artwork"

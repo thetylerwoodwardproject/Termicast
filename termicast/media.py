@@ -7,7 +7,7 @@ image processing do not.
 """
 
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import io
 import json
 import os
@@ -83,7 +83,6 @@ class Prepared:
     image_dims: tuple[int, int] | None = None
     transcript_path: Path | None = None
     transcript_relative: str | None = None
-    warnings: list = field(default_factory=list)
 
     def review(self) -> dict:
         data = {
@@ -95,12 +94,16 @@ class Prepared:
             "audio_channels": self.audio_meta.get("channels", "?"),
             "audio_duration": f"{self.audio_meta.get('duration', '?')} s",
         }
+        if self.audio_note:
+            data["audio_handling"] = self.audio_note
         if self.image_relative:
             data["image_file"] = self.image_relative
             data["image_before"] = f"{self.image_before} bytes"
             data["image_after"] = f"{self.image_after} bytes"
             if self.image_dims:
                 data["image_dimensions"] = f"{self.image_dims[0]}x{self.image_dims[1]}"
+            if self.image_note:
+                data["image_handling"] = self.image_note
         if self.transcript_relative:
             data["transcript_file"] = self.transcript_relative
         return data
