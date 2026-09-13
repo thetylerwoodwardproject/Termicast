@@ -30,9 +30,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
     """
     destination = Path(destination or db.path.parent / "backups").expanduser().resolve()
     now = datetime.now(timezone.utc)
-    # Not `name`: the include_media walk below binds `name` per directory
-    # entry, which used to clobber this and name the ZIP after the last
-    # media file it saw.
+    # Not `name`: the include_media walk below binds `name` per entry.
     archive_name = f"termicast-{now.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:8]}.zip"
     with (nullcontext() if _locked else db.lock()), ExitStack() as locks:
         shows = db.list_shows()
@@ -90,10 +88,8 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                                             raise ValueError(f"Refusing symbolic-link media: {path}")
                                     dirs[:] = [name for name in dirs if not name.startswith(".")]
                                     files.extend(Path(directory) / name for name in names if not name.startswith("."))
-                        # `files` already holds every media file when
-                        # include_media is set, so the membership test below
-                        # ran over thousands of entries per episode; keep a
-                        # parallel set and use the list only for order.
+                        # Set for membership, list for order: `files` holds
+                        # every media file when include_media is set.
                         seen = set(files)
                         for episode in db.list_episodes(show["id"]):
                             expected = []
@@ -106,9 +102,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                                     seen.add(path)
                                     files.append(path)
                         for path in files:
-                            # One lstat answers all three questions; is_symlink
-                            # /exists/is_file were three separate stat calls on
-                            # every archived file.
+                            # One lstat answers all three questions.
                             try:
                                 info = os.lstat(path)
                             except OSError:

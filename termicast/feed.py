@@ -40,26 +40,17 @@ def op3_url(show, mp3_url):
 
 @lru_cache(maxsize=None)
 def _tag(name):
-    """Expand a prefixed name to Clark notation.
-
-    Called tens of thousands of times per render (once per element built,
-    per episode), always over the same small vocabulary.
-    """
+    """Expand a prefixed name to Clark notation. Cached: small vocabulary,
+    called once per element built per episode."""
     if ":" in name:
         prefix, local = name.split(":", 1)
         return f"{{{NS[prefix]}}}{local}"
     return name
 
 
-# Which XML elements each episode field owns. Rebuilding this inside the
-# per-item loop meant constructing a 16-entry dict and re-expanding ~20 tag
-# names for every episode in the feed.
-#
-# Worth doing, but not a hot spot: controlled A/B puts the whole hoist plus
-# the _tag cache at ~3% of render_feed for a 500-episode show (medians
-# overlap; only the minima separate). A profiler had suggested far more,
-# which was its own overhead on cheap Python calls -- the real cost here is
-# lxml's. Don't reach for this file expecting large wins.
+# Which XML elements each episode field owns; built once rather than per item.
+# Only ~3% of render_feed, though: the real cost is lxml's, not Python's, so
+# don't come here expecting large wins.
 _REPLACE_TAGS = {
     key: tuple(_tag(tag) for tag in tags) for key, tags in {
         "title": ("title",), "description": ("description", "content:encoded"),

@@ -21,10 +21,9 @@ from .prompts import (
     DEPLOYED, DRY_RUN_DONE, DESTINATION_SETTINGS, hosting_label, run_menu,
 )
 
-# .feed, .publisher, .importer and friends pull in lxml and the rest of the
-# publishing stack. Each serves one or two subcommands, so they are imported
-# where they are used -- the same convention .archive and .s3deploy already
-# follow below -- to keep startup cheap for the scriptable commands.
+# .feed, .publisher, .importer and friends pull in lxml and the publishing
+# stack for one or two subcommands each, so they are imported where used --
+# the convention .archive and .s3deploy already follow below.
 
 
 
@@ -428,8 +427,6 @@ def _finish_import(publisher, db, show, source):
 def _staged_show(settings, destination):
     """Build a new show from imported identity, pointed at the chosen location.
 
-    The archive and feed branches assembled this identically; a destination
-    field added to one and missed in the other would silently not carry over.
     Returns None when the user backs out of the settings form.
     """
     show = new_show(**settings)

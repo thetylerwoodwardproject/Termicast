@@ -17,8 +17,8 @@ from rich.table import Table
 from rich.text import Text
 
 # questionary/prompt_toolkit cost ~150 ms to import and are needed only once a
-# menu or free-text prompt is actually drawn. Importing them lazily keeps the
-# scriptable commands -- publish-due from cron above all -- fast to start.
+# menu or prompt is drawn, so they load lazily below. Keep it that way: the
+# scriptable commands, publish-due from cron above all, never draw one.
 
 from .models import (new_episode, new_show, positions_by_type, scheme_slug, slug_error, suggest_slug)
 from .faq import FAQ
@@ -116,15 +116,11 @@ def run_menu(title, options, dispatch, *, back, headers=None, refresh=None,
              cancelled="Cancelled. Nothing was changed.", on_error=None):
     """Drive a numbered menu until `back` is chosen, under one error policy.
 
-    `refresh` runs at the top of each iteration, before the menu is drawn,
-    for loops that re-read their subject or reprint a summary.
+    `refresh` runs at the top of each iteration, before the menu is drawn.
 
-    Four loops open-coded this with arms that disagreed: only two reached
-    describe_action_error, one had no `except Exception` at all (so a failed
-    action unwound past its own submenu), and the EOFError arm was present in
-    cli.py but not in hosting_menu -- and EOFError, unlike Cancelled and
-    ExitRequested, derives from Exception, so a bare `except Exception`
-    swallows it and Ctrl-D reads as a failed action instead of an exit.
+    Keep the EOFError arm: unlike Cancelled and ExitRequested it derives from
+    Exception, so without it Ctrl-D reads as a failed action and the menu
+    redraws into EOF forever.
     """
     while True:
         if refresh is not None:
@@ -463,13 +459,7 @@ def text(label, default="", required=False, *, example=None):
 
 def ask(label, default="", *, parse=None, required=False, example=None,
         catching=(ValueError, KeyError)):
-    """Prompt until `parse` accepts the value, keeping what was typed on retry.
-
-    Several open-coded copies of this loop re-offered the *original* default
-    after a rejection, so fixing a mistyped timezone or a slightly-too-long
-    description meant retyping the whole thing. Only the artwork prompt got
-    this right; now every caller does.
-    """
+    """Prompt until `parse` accepts the value, keeping what was typed on retry."""
     while True:
         value = text(label, default, required=required, example=example)
         try:
@@ -743,11 +733,7 @@ def edit_menu(data, fields, episode=False):
 
 
 def _prompt_and_write_s3_keys(cfg_path, incomplete_message):
-    """Ask for both keys, write ~/.s3cfg at mode 0600, and confirm.
-
-    Shared by the offer-when-missing and the replace-on-demand paths so the
-    credential write exists in exactly one place.
-    """
+    """Ask for both keys, write ~/.s3cfg at mode 0600, and confirm."""
     from .s3deploy import write_s3cfg
     access_key = secret("Access key")
     secret_key = secret("Secret key")
@@ -933,12 +919,7 @@ SLUG_PROMPT = "Slug (letters, numbers, hyphens, underscores)"
 
 
 def validated_slug(db, show_id, value, exclude_guid=None):
-    """Return `value` if it is a well-formed, unused slug; else raise ValueError.
-
-    Shared by the add and rename prompts, which each open-coded the same
-    two checks and the same "Invalid slug:" prefix (a third copy of which
-    lives in rename.plan_rename for the non-interactive path).
-    """
+    """Return `value` if it is a well-formed, unused slug; else raise ValueError."""
     reason = slug_error(value)
     if reason:
         raise ValueError(f"Invalid slug: {reason}")
@@ -1262,9 +1243,7 @@ HOSTING_OPTIONS = ["Configure hosting", "Deploy", "Deploy (dry run)",
 def hosting_menu(db, publisher, show):
     """Hosting submenu: setup, deploy, checks, and guidance.
 
-    "Back" stays at 9 with two options after it. The numbering is what users
-    and the docs know, so run_menu takes the back index rather than forcing
-    the entry to the end.
+    "Back" is 9, with two options after it -- the numbering users know.
     """
     state = {"show": show}
     run_menu("Hosting", HOSTING_OPTIONS,

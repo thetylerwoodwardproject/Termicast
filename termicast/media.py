@@ -56,9 +56,7 @@ _OTHER_TYPES = {
 
 
 # Suffixes a staged asset may keep: exactly those with a known Content-Type.
-# The importer used to carry a narrower inline list than the archive adapter,
-# so an imported .m4a/.opus/.flac enclosure was renamed .mp3 and then served
-# as audio/mpeg -- a Content-Type that did not match the bytes.
+# Narrowing this renames e.g. .m4a to .mp3, then serves it as audio/mpeg.
 STAGEABLE_SUFFIXES = frozenset(ENCLOSURE_TYPES) | frozenset(_OTHER_TYPES)
 
 # Fallback when a URL carries no usable suffix at all.
@@ -300,8 +298,7 @@ def _prepare_audio(source, dest_dir, slug, preset_name, keep, update=None):
         _atomic_install(temp, dest)
         if not pass_through:
             # A pass-through is a byte-identical copy, so `meta` already
-            # describes the installed file; re-probing costs a second full
-            # ffprobe scan of a file that can run to hundreds of megabytes.
+            # describes the installed file; re-probing rescans the whole file.
             meta = probe_audio(dest)
     finally:
         temp.unlink(missing_ok=True)

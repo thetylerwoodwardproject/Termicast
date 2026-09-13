@@ -289,12 +289,7 @@ def backfill_chapter_ends(chapters, duration):
 
 
 def validate_chapter_payload(payload, episode):
-    """Return the chapters array of a chapter-JSON document, or raise.
-
-    The local-file reader and the importer's download path applied the same
-    four checks and the same endTime backfill in two places, with only the
-    missing-key behaviour differing.
-    """
+    """Return the chapters array of a chapter-JSON document, or raise."""
     if not isinstance(payload, dict):
         raise ValueError("Chapter JSON must be an object")
     chapters = payload.get("chapters")
@@ -362,12 +357,7 @@ def _download(url, target, limit, progress=None):
 
 
 def _probe_duration(path):
-    """Duration in seconds from ffprobe, or None if it cannot be determined.
-
-    Both the local and the downloaded-URL probe ran this identical command
-    and swallowed the identical exception set; keeping one copy means the
-    two cannot drift apart.
-    """
+    """Duration in seconds from ffprobe, or None if it cannot be determined."""
     try:
         process = subprocess.run(
             ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",

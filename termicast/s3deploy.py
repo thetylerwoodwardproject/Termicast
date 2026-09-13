@@ -123,8 +123,7 @@ def object_key(show, relative):
 def _s4cmd_base(show, verb):
     """Executable, verb, and the endpoint override every invocation needs.
 
-    Five call sites repeated this; a show pointed at a non-AWS endpoint
-    silently fell back to AWS wherever one of them was missed.
+    Miss the endpoint and a non-AWS show silently falls back to AWS.
     """
     args = [s4cmd_path(), verb]
     if show.get("endpoint_url"):
@@ -176,12 +175,9 @@ def batches(relative_paths):
     """Group managed paths into runs that one `s4cmd put` can carry.
 
     s4cmd's multi-source put joins each source's BASENAME onto the target
-    directory (S3Handler.put_files), so a batch is only well defined when
-    every file in it lands in the same folder. --API-ContentType likewise
-    applies to the whole invocation, so the type has to be uniform too.
-    Grouping on both gives roughly one run per managed folder -- audio,
-    images/episodes, images/chapters, transcripts, chapters -- instead of
-    one process per file. Input order is preserved within and across groups.
+    directory (S3Handler.put_files), so a batch must share one folder;
+    --API-ContentType applies to the whole invocation, so the type must be
+    uniform too. Input order is preserved within and across groups.
     """
     groups = {}
     for relative in relative_paths:
@@ -194,8 +190,8 @@ def batches(relative_paths):
         groups.setdefault(key, []).append(relative)
     for (folder, content_type), group in groups.items():
         names = [PurePosixPath(relative).name for relative in group]
-        # Guaranteed by paths being unique within one folder, but the whole
-        # batch silently overwrites itself if it ever stops holding.
+        # Holds while paths are unique per folder; if it ever stops, the
+        # batch silently overwrites itself.
         assert len(set(names)) == len(names), f"duplicate basenames in {folder}"
     return groups
 
@@ -203,10 +199,8 @@ def batches(relative_paths):
 def upload_batch(show, root, relatives, content_type, dry_run=False, timeout=None):
     """Upload one batch of files in a single s4cmd process.
 
-    Spawning s4cmd per file meant importing boto3 before a byte moved; a
-    150-episode show republishing three assets each paid that ~450 times.
-    One process per folder also lets --num-threads do real work, since
-    put_files spreads a multi-source batch over its own thread pool.
+    See batches() for why a batch is one folder. A multi-source put also
+    lets --num-threads work, since put_files uses its own thread pool.
     """
     root = Path(root)
     for relative in relatives:

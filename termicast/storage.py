@@ -15,9 +15,7 @@ from .validation import validate_https
 
 
 # Top-level folders Termicast creates and owns inside a show's output
-# directory. Lives here rather than in rename.py because storage is the
-# lower layer: rename imports storage, so the reverse needed a
-# function-scope import to dodge the cycle.
+# directory. Here rather than rename.py so the dependency runs one way.
 MANAGED_FOLDERS = ("audio", "chapters", "images", "transcripts")
 
 

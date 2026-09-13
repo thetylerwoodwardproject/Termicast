@@ -114,10 +114,7 @@ class Database:
             return json.loads(row[0]) if row else None
 
     def require_show(self, show_id):
-        """get_show, but refusing an unknown ID rather than returning None.
-
-        Eight call sites repeated the same None check and message.
-        """
+        """get_show, but refusing an unknown ID rather than returning None."""
         show = self.get_show(show_id)
         if show is None:
             raise ValueError("Unknown podcast ID")
@@ -156,18 +153,10 @@ class Database:
     def _imported_episodes(self, template, url_map):
         """Episodes recovered from an imported feed's XML, parsed at most once.
 
-        list_episodes() is a read accessor -- show_summary redraws call it,
-        and rename_form calls it three times per loop -- but the template is
-        a whole feed, up to MAX_FEED_BYTES. Re-parsing it on every call put a
-        visible pause on ordinary menu navigation for a migrated show.
-
-        The blob only changes when save_show() writes a new one, so it keys
-        the cache. Callers get their own copy: these dicts are handed out and
-        edited (chapters lists above all), and a shared reference would let
-        one caller's edit leak into the next call's results. The cache holds
-        the JSON form and reparses per call, which is ~3x cheaper than
-        deepcopy and isolates the same way -- episodes are stored as JSON in
-        the episodes table regardless, so the representation is lossless.
+        The template blob only changes when save_show() writes one, so it
+        keys the cache. Callers get their own copy -- these dicts are handed
+        out and edited -- via a JSON round-trip, which is ~3x cheaper than
+        deepcopy and lossless here, since episodes are stored as JSON anyway.
         """
         from .importer import extract_episodes
         key = (hashlib.sha256(template).hexdigest(), json.dumps(url_map, sort_keys=True))

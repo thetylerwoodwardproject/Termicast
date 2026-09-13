@@ -62,9 +62,8 @@ _MIME_MARKERS = ("Unexpected Content-Type ", "Missing Content-Type ")
 def is_mime_problem(text) -> bool:
     """True when a problem string or exception describes a Content-Type fault.
 
-    The markers have to match what check_url() emits above exactly, or the
+    _MIME_MARKERS must stay in step with what check_url() emits above, or the
     offer to correct the host's MIME settings silently stops appearing.
-    Callers ask through here so there is only one copy to keep in step.
     """
     text = str(text)
     return any(marker in text for marker in _MIME_MARKERS)
@@ -175,18 +174,16 @@ def _full_body(url):
         return None
 
 
-# Each check is one HEAD against object storage, and they are independent.
-# Run a bounded number at once: a 200-episode show is ~600 checks, and
-# serially that is minutes of latency on every publish.
+# Independent HEADs, and a 200-episode show is ~600 of them; serially that
+# is minutes of latency on every publish.
 VERIFY_WORKERS = 12
 
 
 def check_urls(pairs) -> list[str]:
     """Check many (url, expected_content_type) pairs, in the order given.
 
-    urllib opens a fresh connection per request and offers no keep-alive, so
-    concurrency -- not connection reuse -- is what makes a large catalogue
-    verifiable in reasonable time.
+    urllib has no keep-alive, so concurrency rather than connection reuse is
+    what makes a large catalogue verifiable in reasonable time.
     """
     pairs = list(pairs)
     if not pairs:
@@ -204,9 +201,8 @@ def check_urls(pairs) -> list[str]:
 def asset_urls(show, episodes, skip=()) -> list[tuple]:
     """Managed published asset URLs and the Content-Type each should carry.
 
-    `skip` drops URLs a caller has already verified -- a deploy checks what
-    it just uploaded, so re-checking those in the full sweep doubles the
-    request count for no extra coverage.
+    `skip` drops URLs the caller has already verified, so a deploy does not
+    check what it just uploaded twice.
     """
     from .media import content_type_for
     pairs = []

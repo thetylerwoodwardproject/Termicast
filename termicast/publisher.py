@@ -91,11 +91,9 @@ def _verified_urls(show, relative_paths):
 def _verify_published_assets(show, episodes, skip=()):
     """Fail loudly if any published episode's assets aren't publicly reachable.
 
-    A deploy that silently skips an asset type would otherwise report success;
-    this checks the full published set, not just the files this call uploaded,
-    so such a gap surfaces immediately. `skip` carries the URLs the upload
-    already verified: covering them twice doubles the request count without
-    widening the coverage this exists for.
+    Checks the full published set, not just what this call uploaded, so an
+    asset type the deploy silently skipped still surfaces. `skip` carries the
+    URLs the upload already verified.
     """
     from .hosting import check_assets, summarize_verification_problems
     problems = check_assets(show, episodes, skip=skip)

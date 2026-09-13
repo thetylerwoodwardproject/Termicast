@@ -60,8 +60,7 @@ def import_csv(db, show_id, path):
 
     def preflight(existing, show):
         prepared = []
-        # Rows without a GUID are matched on mp3_url. Scanning `existing` per
-        # row made that O(rows x episodes); index it once instead.
+        # Rows without a GUID match on mp3_url; index once, not per row.
         by_mp3 = {}
         for episode in existing.values():
             by_mp3.setdefault(episode["mp3_url"], []).append(episode)
