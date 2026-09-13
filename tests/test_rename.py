@@ -284,6 +284,28 @@ def test_chapter_image_deployable_only_with_show(db, show):
     assert not any("c1.jpg" in path for path in episode_asset_paths(foreign, show))
 
 
+def test_imported_audio_image_transcript_deployable_only_with_show(show):
+    """Imported episodes carry URLs but no *_path fields; `show` recovers them.
+
+    Without `show`, the same three assets are invisible to deploy even though
+    the importer staged them locally -- exactly the bug where imported audio,
+    artwork, and transcripts never reach S3.
+    """
+    from termicast.publisher import episode_asset_paths
+    record = new_episode(
+        guid="ep-imported", title="Imported", description="d",
+        mp3_url=f"{BASE}/audio/e.mp3", length=5, duration=60.0,
+        artwork_url=f"{BASE}/images/episodes/e.jpg",
+        transcript_url=f"{BASE}/transcripts/e.vtt",
+    )
+    assert episode_asset_paths(record) == set()
+    recovered = episode_asset_paths(record, show)
+    assert recovered == {"audio/e.mp3", "images/episodes/e.jpg", "transcripts/e.vtt"}
+    # An externally hosted URL isn't ours to upload.
+    foreign = dict(record, mp3_url="https://other.example.org/e.mp3")
+    assert "audio/e.mp3" not in episode_asset_paths(foreign, show)
+
+
 # --- editor wiring --------------------------------------------------------
 
 def test_rename_form_cancel_changes_nothing(db, show, episode, monkeypatch):

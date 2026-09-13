@@ -14,7 +14,7 @@ import tempfile
 from .database import filesystem_lock
 from .feed import render_feed
 from .validation import validate_episode
-from .models import chapters_relative, transcript_relative
+from .models import ASSET_ROLES, chapters_relative, transcript_relative
 from .storage import asset_root, asset_base, local_relative
 
 
@@ -56,18 +56,20 @@ def output_lock(show):
 def episode_asset_paths(episode, show=None):
     """Relative managed asset paths that must exist for this episode.
 
-    `show` is needed to recover chapter image paths: unlike audio_path/
-    image_path, chapters carry no stored relative path, only the public URL
-    (`img`) shipped as-is inside chapters.json. Without `show`, per-chapter
-    images are skipped.
+    Audio, artwork, and transcript paths come from their stored path field
+    when present; imported episodes carry only a public URL, so the relative
+    path is recovered from that URL via `local_relative` when `show` is
+    supplied. Chapter images likewise carry no stored path and need `show`.
+    Without `show`, only stored path fields and the recomputed chapter and
+    transcript paths are returned.
     """
     paths = set()
-    if episode.get("audio_path"):
-        paths.add(episode["audio_path"])
-    if episode.get("image_path"):
-        paths.add(episode["image_path"])
-    if episode.get("transcript_path"):
-        paths.add(episode["transcript_path"])
+    for field, path_field in ASSET_ROLES:
+        relative = episode.get(path_field)
+        if show is not None and not relative:
+            relative = local_relative(show, episode.get(field))
+        if relative:
+            paths.add(str(relative))
     if episode.get("chapters"):
         paths.add(chapters_relative(episode))
         if show is not None:
@@ -78,6 +80,19 @@ def episode_asset_paths(episode, show=None):
     if episode.get("_transcript_vtt"):
         paths.add(transcript_relative(episode))
     return paths
+
+
+def _verify_published_assets(show, episodes):
+    """Fail loudly if any published episode's assets aren't publicly reachable.
+
+    A deploy that silently skips an asset type would otherwise report success;
+    this re-checks the full published set (not just the files this call
+    uploaded) so such a gap surfaces immediately.
+    """
+    from .hosting import check_assets, summarize_verification_problems
+    problems = check_assets(show, episodes)
+    if problems:
+        raise RuntimeError("\n".join(summarize_verification_problems(problems, target="s3")))
 
 
 def upload_existing_assets(show, relative_paths, dry_run=False, verify=True):
@@ -251,6 +266,8 @@ class Publisher:
                 uploaded = upload_existing_assets(show, sorted(assets), dry_run=dry_run, verify=verify)
                 if show.get("mirror_feed"):
                     uploaded = list(uploaded) + list(mirror_feed(show, dry_run=dry_run, verify=verify))
+                if verify and not dry_run:
+                    _verify_published_assets(show, episodes)
                 return uploaded
             feed = asset_root(show) / "feed.xml"
             if not feed.is_file():
@@ -338,6 +355,10 @@ class Publisher:
             if any((root / relative).is_file() for relative in paths):
                 check_s3_access(show)
             upload_existing_assets(show, sorted(paths))
+            published = [dict(json.loads(row["data"]), status=row["status"])
+                         for row in snapshot["selected"] if row["status"] == "published"]
+            if published:
+                _verify_published_assets(show, published)
         except Exception as exc:
             raise RuntimeError(
                 f"Saved locally. Remote publication failed: {exc}. "

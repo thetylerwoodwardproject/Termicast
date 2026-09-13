@@ -12,13 +12,11 @@ import json
 import os
 from pathlib import Path
 
-from .models import chapters_relative, slug_error, transcript_relative
+from .models import ASSET_ROLES, chapters_relative, slug_error, transcript_relative
 from .publisher import fsync_dir, operation_lock, output_lock
 from .storage import asset_base, asset_root, local_relative
 from .validation import validate_episode
 
-ASSET_ROLES = (("mp3_url", "audio_path"), ("artwork_url", "image_path"),
-               ("transcript_url", "transcript_path"))
 # The managed asset folders, matching the set repair.scan_show enforces.
 MANAGED_FOLDERS = ("audio", "chapters", "images", "transcripts")
 

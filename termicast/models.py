@@ -16,6 +16,11 @@ NAMING_FALLBACKS = ("position", "keep", "renumber")
 CHAPTER_EXT = ".json"
 TRANSCRIPT_EXT = ".vtt"
 
+# Each public asset URL's stored relative-path field. Imported episodes carry
+# only the URL fields; the path fields are recovered from the URL on demand.
+ASSET_ROLES = (("mp3_url", "audio_path"), ("artwork_url", "image_path"),
+               ("transcript_url", "transcript_path"))
+
 
 def chapter_filename(guid):
     """Keep shipped UUID filenames; opaque imported IDs never become paths."""

@@ -13,7 +13,7 @@ import shutil
 import tempfile
 
 from .feed import MAX_FEED_BYTES, OP3_PREFIX, _parse_xml, _tag, _put
-from .models import new_episode, plan_slugs
+from .models import ASSET_ROLES, new_episode, plan_slugs
 from .publisher import atomic_write, fsync_dir
 from .validation import _HTTPSRedirectHandler
 from . import validation
@@ -228,10 +228,6 @@ def _convert_import_artwork(path, url, review_artwork, kind=""):
         return new_path
     atomic_write(path, content.getvalue())
     return path
-
-
-ASSET_ROLES = (("mp3_url", "audio_path"), ("artwork_url", "image_path"),
-               ("transcript_url", "transcript_path"))
 
 
 def _shared_asset_urls(episodes):

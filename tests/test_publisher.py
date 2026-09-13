@@ -310,6 +310,36 @@ def test_s3_deploy_no_verify_suppresses_checks(db, show, monkeypatch):
     assert verifies == [False, False]
 
 
+def test_s3_deploy_verify_reports_unreachable_published_asset(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    from termicast import hosting, s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: list(a[1]))
+    monkeypatch.setattr(hosting, "check_assets",
+                        lambda s, e: ["Unreachable: https://cdn.example.org/show/audio/e1.mp3"])
+    with pytest.raises(RuntimeError, match="Unreachable"):
+        Publisher(db).deploy(show["id"])
+
+
+def test_s3_deploy_verify_passes_when_assets_reachable(db, show, monkeypatch):
+    show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
+                enabled=False, keep_local_media=True)
+    db.save_show(show)
+    Publisher(db).publish(show["id"], make_episode())
+    _write_local_audio(show)
+    from termicast import hosting, s3deploy
+    monkeypatch.setattr(s3deploy, "deploy_paths", lambda *a, **k: list(a[1]))
+    verified = []
+    monkeypatch.setattr(hosting, "check_assets", lambda s, e: verified.append(e) or [])
+    result = Publisher(db).deploy(show["id"])
+    assert result == ["audio/e1.mp3"]
+    assert len(verified) == 1
+    assert verified[0][0]["mp3_url"]
+
+
 def test_s3_deploy_preflights_access_before_upload(db, show, monkeypatch):
     show = dict(show, hosting="s3", bucket="b", prefix="p", asset_base_url="https://cdn.example.org/show",
                 enabled=False, keep_local_media=True)
