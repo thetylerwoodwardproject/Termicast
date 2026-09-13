@@ -59,6 +59,27 @@ def test_upload_file_runs_s4cmd(tmp_path, monkeypatch):
     assert args[-1] == "s3://my-bucket/my-show/audio/x.mp3"
 
 
+def test_upload_file_disables_s3_checksum_calculation(tmp_path, monkeypatch):
+    """Linode Object Storage rejects newer botocore's default S3 request
+    checksums with a generic AccessDenied on PutObject; s4cmd must run with
+    these opted back out."""
+    show = s3_show(tmp_path)
+    (tmp_path / "out" / "audio").mkdir(parents=True)
+    local = tmp_path / "out" / "audio" / "x.mp3"
+    local.write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    upload_file(show, local, "audio/x.mp3")
+    env = run.call_args.kwargs["env"]
+    assert env["AWS_REQUEST_CHECKSUM_CALCULATION"] == "when_required"
+    assert env["AWS_RESPONSE_CHECKSUM_VALIDATION"] == "when_required"
+
+
+def test_s4cmd_env_respects_operator_override(monkeypatch):
+    monkeypatch.setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_supported")
+    assert s3deploy._s4cmd_env()["AWS_REQUEST_CHECKSUM_CALCULATION"] == "when_supported"
+
+
 def test_upload_file_access_denied_includes_iam_policy_for_aws(tmp_path, monkeypatch):
     show = s3_show(tmp_path)
     show["endpoint_url"] = ""

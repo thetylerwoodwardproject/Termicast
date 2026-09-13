@@ -35,11 +35,22 @@ NUM_THREADS = 2
 S3_CMD_TIMEOUT = 60
 
 
+# Recent botocore (which s4cmd uses internally) defaults to adding S3 request
+# checksums that Linode Object Storage's backend rejects with a generic
+# AccessDenied on PutObject. These env vars restore the older opt-in
+# behavior; setdefault so an operator's own explicit setting always wins.
+def _s4cmd_env():
+    env = os.environ.copy()
+    env.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+    env.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+    return env
+
+
 def _run(args, timeout=None):
     """Run s4cmd, converting a hang into an actionable RuntimeError."""
     try:
         return subprocess.run(args, capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, timeout=timeout)
+                              stdin=subprocess.DEVNULL, timeout=timeout, env=_s4cmd_env())
     except subprocess.TimeoutExpired as exc:
         command = args[1] if len(args) > 1 else args[0]
         raise RuntimeError(f"s4cmd {command} timed out after {timeout} seconds") from exc
@@ -209,7 +220,7 @@ def remote_rename(show, old_relative, new_relative):
     args += ["--force",
              f"s3://{show['bucket']}/{object_key(show, old_relative)}",
              f"s3://{show['bucket']}/{object_key(show, new_relative)}"]
-    process = subprocess.run(args, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    process = _run(args)
     if process.returncode != 0:
         raise RuntimeError(
             f"s4cmd rename failed for {old_relative} -> {new_relative}: "
