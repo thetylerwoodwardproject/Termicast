@@ -156,3 +156,50 @@ def test_merge_callback_may_take_a_backup(db, show, time_box):
     Publisher(db).merge(show["id"], callback)
     assert taken and Path(taken[0]).is_file()
     assert [e["guid"] for e in db.list_episodes(show["id"])] == ["ep-1"]
+
+
+def _feed(titles):
+    items = "".join(
+        f'<item><title>{title}</title><guid isPermaLink="false">ep-{i}</guid>'
+        f'<description>d</description>'
+        f'<enclosure url="https://old.example.org/audio/ep{i}.mp3" length="1" type="audio/mpeg"/>'
+        f'<pubDate>Sun, 01 Sep 2024 12:00:00 GMT</pubDate>'
+        f'<itunes:duration>60</itunes:duration></item>'
+        for i, title in enumerate(titles))
+    return ('<?xml version="1.0" encoding="UTF-8"?>'
+            '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">'
+            '<channel><title>S</title><description>d</description>'
+            '<link>https://old.example.org</link>' + items + '</channel></rss>').encode()
+
+
+def test_cached_template_episodes_are_isolated_between_calls(db, tmp_path):
+    """Editing a returned episode must not leak into the next call.
+
+    The parsed template is cached to keep menu navigation responsive, so a
+    caller that mutates what it got back would otherwise corrupt every
+    later read of the same show.
+    """
+    from termicast.models import new_show
+    show = db.save_show(new_show(title="S", description="d", base_url="https://e.org/s",
+                                 output_dir=str(tmp_path / "out")),
+                        template=_feed(["Original"]))
+
+    first = db.list_episodes(show["id"])
+    assert first[0]["title"] == "Original"
+    first[0]["title"] = "Mutated"
+    first[0].setdefault("chapters", []).append({"startTime": 0.0})
+
+    second = db.list_episodes(show["id"])
+    assert second[0]["title"] == "Original"
+    assert not second[0].get("chapters")
+
+
+def test_template_cache_refreshes_when_the_template_changes(db, tmp_path):
+    from termicast.models import new_show
+    show = db.save_show(new_show(title="S", description="d", base_url="https://e.org/s",
+                                 output_dir=str(tmp_path / "out")),
+                        template=_feed(["Before"]))
+    assert db.list_episodes(show["id"])[0]["title"] == "Before"
+
+    db.save_show(show, template=_feed(["After"]))
+    assert db.list_episodes(show["id"])[0]["title"] == "After"
