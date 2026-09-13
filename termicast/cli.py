@@ -604,10 +604,10 @@ def _delete_show(db, show):
     uses_s3 = bool(show.get("bucket")) and (show.get("hosting") == "s3" or show.get("mirror_feed"))
     allow_bucket_root = False
     if uses_s3 and not show.get("prefix"):
-        console.print(
+        warning(
             f"'{show['title']}' has no S3 prefix, so its objects live at the root of "
             f"bucket '{show['bucket']}'. Deleting them means deleting EVERYTHING in "
-            "that bucket, not just this show's files.", style=ACCENT)
+            "that bucket, not just this show's files.")
         if not confirm(f"Continue and delete the entire contents of bucket '{show['bucket']}'?"):
             console.print("Cancelled. Nothing was changed.")
             return
