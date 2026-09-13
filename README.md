@@ -1,5 +1,14 @@
 # 📻 Termicast
 
+> [!NOTE]
+> This project is still in rapid development and may have frequent changes.
+> You can always re-run the one-line install command to grab a fresh copy of
+> the code:
+>
+> ```sh
+> curl -fsSL https://raw.githubusercontent.com/thetylerwoodwardproject/Termicast/main/install.sh | bash
+> ```
+
 > [!TIP]
 > New here? Start with the **[User Guide](USER_GUIDE.md)** for a plain-English
 > walkthrough. This README is the technical reference.
