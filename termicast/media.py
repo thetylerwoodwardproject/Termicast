@@ -284,7 +284,11 @@ def _prepare_audio(source, dest_dir, slug, preset_name, keep, update=None):
             _ffmpeg(args, update=update, duration=meta["duration"] or None)
             note = f"converted to MP3 {preset['bitrate'] // 1000} kbps / {preset['sample_rate']} Hz"
         _atomic_install(temp, dest)
-        meta = probe_audio(dest)
+        if not pass_through:
+            # A pass-through is a byte-identical copy, so `meta` already
+            # describes the installed file; re-probing costs a second full
+            # ffprobe scan of a file that can run to hundreds of megabytes.
+            meta = probe_audio(dest)
     finally:
         temp.unlink(missing_ok=True)
     return dest, f"audio/{dest.name}", before, dest.stat().st_size, meta, note
@@ -295,6 +299,7 @@ def _check_channels(meta):
         raise ValueError(
             "Multichannel audio is not supported. Export a mono or stereo file "
             f"and retry (detected {meta['channels']} channels).")
+
 
 
 def _needs_orientation(source):
@@ -318,6 +323,8 @@ def _prepare_image(source, dest_dir, slug, preset_name, keep, update=None):
     with Image.open(source) as image:
         fmt = image.format
         size = image.size
+        # verify() must be the first call after open(), so the orientation
+        # tag cannot be read here -- _needs_orientation() reopens for it.
         image.verify()
 
     if keep:
