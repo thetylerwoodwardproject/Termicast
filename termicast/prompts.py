@@ -929,26 +929,30 @@ def check_slug_collision(db, show_id, slug, exclude_guid=None):
             raise ValueError(f"Slug '{slug}' is already used by episode {episode['guid']}; choose another name")
 
 
+SLUG_PROMPT = "Slug (letters, numbers, hyphens, underscores)"
+
+
+def validated_slug(db, show_id, value, exclude_guid=None):
+    """Return `value` if it is a well-formed, unused slug; else raise ValueError.
+
+    Shared by the add and rename prompts, which each open-coded the same
+    two checks and the same "Invalid slug:" prefix (a third copy of which
+    lives in rename.plan_rename for the non-interactive path).
+    """
+    reason = slug_error(value)
+    if reason:
+        raise ValueError(f"Invalid slug: {reason}")
+    check_slug_collision(db, show_id, value, exclude_guid=exclude_guid)
+    return value
+
+
 def _choose_slug(db, show, episode, explicit_slug):
     if explicit_slug is not None:
-        reason = slug_error(explicit_slug)
-        if reason:
-            raise ValueError(f"Invalid slug: {reason}")
-        check_slug_collision(db, show["id"], explicit_slug)
-        return explicit_slug
+        return validated_slug(db, show["id"], explicit_slug)
     suggested = suggest_slug(episode)
     console.print(f"Suggested slug: {suggested}", style=ACCENT, markup=False)
-    while True:
-        value = text("Slug (letters, numbers, hyphens, underscores)", suggested, required=True)
-        reason = slug_error(value)
-        if reason:
-            error(f"Invalid slug: {reason}")
-            continue
-        try:
-            check_slug_collision(db, show["id"], value)
-            return value
-        except ValueError as exc:
-            error(exc)
+    return ask(SLUG_PROMPT, suggested, required=True,
+               parse=lambda value: validated_slug(db, show["id"], value))
 
 
 def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, image_preset=None,
@@ -1064,14 +1068,10 @@ def rename_form(db, show, publisher, saved):
                   "name automatically.", markup=False)
     others = [e for e in db.list_episodes(show["id"]) if e["guid"] != saved["guid"]]
     while True:
-        value = text("Slug (letters, numbers, hyphens, underscores)",
-                     _rename_default(db, show, saved), required=True)
-        reason = slug_error(value)
-        if reason:
-            error(f"Invalid slug: {reason}")
-            continue
+        value = ask(SLUG_PROMPT, _rename_default(db, show, saved), required=True,
+                    parse=lambda slug: validated_slug(db, show["id"], slug,
+                                                      exclude_guid=saved["guid"]))
         try:
-            check_slug_collision(db, show["id"], value, exclude_guid=saved["guid"])
             plan = plan_rename(show, saved, value, others=others)
         except ValueError as exc:
             error(exc)
@@ -1179,6 +1179,27 @@ def edit_episode_form(db, show, publisher, saved):
         return
 
 
+# Where each server keeps its per-site configuration, and how to find it.
+_SITE_CONFIG_HINTS = {
+    "Nginx": ("  /etc/nginx/sites-available/<domain>  or  /etc/nginx/conf.d/<domain>.conf\n"
+              "  Find it: sudo grep -R -n 'server_name {domain}' "
+              "/etc/nginx/sites-enabled /etc/nginx/conf.d"),
+    "Apache": ("  /etc/apache2/sites-available/<domain>.conf  or  /etc/httpd/conf.d/<domain>.conf\n"
+               "  Find it: sudo grep -R -n '{domain}' "
+               "/etc/apache2/sites-enabled /etc/httpd/conf.d"),
+}
+
+
+def _paste_fallback(snippet, path, border=ACCENT):
+    """Show the snippet to paste by hand when the automatic patch is declined
+    or fails, and name the file to open."""
+    console.print(Panel(snippet.rstrip(),
+                        title="Paste this into the server/Directory block with nano",
+                        border_style=border, expand=False))
+    console.print(f"nano {path}", markup=False)
+    return False
+
+
 def correct_host_mime(db, show):
     """Apply podcast MIME types to the site config, with a paste fallback."""
     from urllib.parse import urlsplit
@@ -1199,35 +1220,20 @@ def correct_host_mime(db, show):
                 "need object metadata or CDN changes instead.")
     console.print("Choose the site configuration file that serves this URL (the one with its "
                   "server_name/root, not the main nginx.conf). Common locations:", markup=False)
-    if name == "Nginx":
-        console.print("  /etc/nginx/sites-available/<domain>  or  /etc/nginx/conf.d/<domain>.conf\n"
-                      f"  Find it: sudo grep -R -n 'server_name {domain}' "
-                      "/etc/nginx/sites-enabled /etc/nginx/conf.d", markup=False)
-    else:
-        console.print("  /etc/apache2/sites-available/<domain>.conf  or  /etc/httpd/conf.d/<domain>.conf\n"
-                      f"  Find it: sudo grep -R -n '{domain}' "
-                      "/etc/apache2/sites-enabled /etc/httpd/conf.d", markup=False)
+    console.print(_SITE_CONFIG_HINTS[name].format(domain=domain), markup=False)
     path = text("Site configuration path", required=True)
     snippet = mime_snippet(name)
     console.print(Panel(snippet.rstrip(),
-                        title=f"MIME fix Termicast will add",
+                        title="MIME fix Termicast will add",
                         subtitle="application/rss+xml for the feed; application/json+chapters for chapters",
                         border_style=ACCENT, expand=False))
     if not confirm("Apply this to the configuration automatically?", True):
-        console.print(Panel(snippet.rstrip(),
-                            title="Paste this into the server/Directory block with nano",
-                            border_style=ACCENT, expand=False))
-        console.print(f"nano {path}", markup=False)
-        return False
+        return _paste_fallback(snippet, path)
     try:
         backup, changed = apply_mime_patch(name, path, servers[name])
     except (ValueError, RuntimeError) as exc:
         error(f"Could not apply the MIME fix: {exc}")
-        console.print(Panel(snippet.rstrip(),
-                            title="Paste this into the server/Directory block with nano",
-                            border_style="red", expand=False))
-        console.print(f"nano {path}", markup=False)
-        return False
+        return _paste_fallback(snippet, path, border="red")
     if changed:
         console.print(f"Configuration updated. Backup: {backup}", markup=False)
         console.print("Configuration syntax is valid.", style=ACCENT)
