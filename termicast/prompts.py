@@ -4,21 +4,20 @@ from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import lru_cache
 import math
 import os
 import sys
 from zoneinfo import ZoneInfo
 
-import questionary
-from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
-from prompt_toolkit.keys import Keys
-
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
+# questionary/prompt_toolkit cost ~150 ms to import and are needed only once a
+# menu or free-text prompt is actually drawn. Importing them lazily keeps the
+# scriptable commands -- publish-due from cron above all -- fast to start.
 
 from .models import (new_episode, new_show, positions_by_type, scheme_slug, slug_error, suggest_slug)
 from .faq import FAQ
@@ -32,14 +31,17 @@ WAVEFORM = "▁▂▃▅▇█▇▅▃▂▁"
 console = Console()
 _backup_action = ContextVar("termicast_backup_action", default=None)
 
-MENU_STYLE = questionary.Style([
-    ("qmark", f"fg:{ACCENT}"),
-    ("answer", f"fg:{ACCENT}"),
-    ("pointer", f"fg:{ACCENT}"),
-    ("highlighted", f"fg:{ACCENT} bold"),
-    ("selected", "noreverse"),
-    ("separator", f"fg:{ACCENT} bold"),
-])
+@lru_cache(maxsize=1)
+def _menu_style():
+    import questionary
+    return questionary.Style([
+        ("qmark", f"fg:{ACCENT}"),
+        ("answer", f"fg:{ACCENT}"),
+        ("pointer", f"fg:{ACCENT}"),
+        ("highlighted", f"fg:{ACCENT} bold"),
+        ("selected", "noreverse"),
+        ("separator", f"fg:{ACCENT} bold"),
+    ])
 
 
 def show_banner():
@@ -94,6 +96,7 @@ def menu_utilities(backup_action):
 
 
 def show_faq():
+    from rich.markdown import Markdown
     console.print(Markdown(FAQ))
 
 
@@ -165,6 +168,8 @@ class _Action:
 
 def _menu_key_bindings(digits, num_choices):
     """Key bindings for numeric jump-select plus hotkeys, exit, and interrupts."""
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
     bindings = KeyBindings()
 
     def jump(event, new_digits):
@@ -221,6 +226,9 @@ def menu(title, options, default=None, headers=None):
     rendered (unselectable) immediately before that option, for grouping
     otherwise-flat option lists without changing their numbering.
     """
+    import questionary
+    from prompt_toolkit.key_binding import merge_key_bindings
+
     headers = headers or {}
     num_choices = len(options)
 
@@ -251,7 +259,7 @@ def menu(title, options, default=None, headers=None):
             default=current_default,
             qmark="",
             instruction=" ",
-            style=MENU_STYLE,
+            style=_menu_style(),
             use_arrow_keys=True,
             use_jk_keys=False,
             use_emacs_keys=False,
@@ -356,6 +364,9 @@ def _read_value(prompt, *, password=False):
     """
     if not sys.stdin.isatty():
         return console.input(prompt, password=password)
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
     bindings = KeyBindings()
 
     @bindings.add(Keys.Escape, eager=True)

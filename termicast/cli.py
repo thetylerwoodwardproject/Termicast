@@ -13,20 +13,17 @@ from rich.table import Table
 from rich.text import Text
 
 from .database import Database
-from .backup import create_backup
-from .feed import validate_feed
-from .importer import import_feed, download_import
-from .csvio import export_csv, import_csv
-from .migration import migration_guidance
 from .models import new_show
 from .prompts import (
     ACCENT, confirm, console, edit_field, error, menu, show_banner, show_form, show_summary, text,
     warning, menu_utilities, show_faq, Cancelled, ExitRequested, edit_episode_form,
     optional_assets, add_episode, episode_form, hosting_menu,
 )
-from .publisher import Publisher, atomic_write
-from .repair import scan_show, repair_show
-from .hosting import doctor
+
+# .feed, .publisher, .importer and friends pull in lxml and the rest of the
+# publishing stack. Each serves one or two subcommands, so they are imported
+# where they are used -- the same convention .archive and .s3deploy already
+# follow below -- to keep startup cheap for the scriptable commands.
 
 
 def _describe_action_error(exc):
@@ -148,6 +145,7 @@ def _review_optional(episodes, root, show):
 
 
 def _check_repair(db, show):
+    from .repair import scan_show
     scan = scan_show(db, show["id"])
     console.print("Scan is offline. Absent optional chapters/transcripts are not errors.", markup=False)
     for issue in scan["issues"]:
@@ -172,6 +170,7 @@ def _check_repair(db, show):
         console.print(f"Copy {source} -> {asset_root(show) / relative}\nURL: {asset_base(show)}/{relative.as_posix()}", markup=False)
     if not confirm("Back up saved state/feeds/chapters and regenerate WITHOUT releasing scheduled episodes?", False):
         return
+    from .repair import repair_show
     backup, result = repair_show(db, scan, recoveries, output_dir)
     console.print(f"Backup: {backup}", markup=False)
     for issue in result["issues"]:
@@ -180,6 +179,7 @@ def _check_repair(db, show):
 
 
 def _backup(db, destination=None, include_media=False):
+    from .backup import create_backup
     path = create_backup(db, destination, include_media=include_media)
     console.print(f"Backup saved: {path}", style=ACCENT, markup=False)
     with ZipFile(path) as archive:
@@ -273,13 +273,16 @@ def _tool_action(db, publisher, show, action):
     elif action == 3:
         path = text("CSV path (merge; no episodes deleted)", required=True)
         if confirm("Preflight and merge this CSV?", False):
+            from .csvio import import_csv
             count = import_csv(db, show["id"], path)
             console.print(f"Merged {count} episodes.", style=ACCENT)
     elif action == 4:
         selection = ("all", "published", "scheduled")[menu("Export episodes", ["All", "Published", "Scheduled"]) - 1]
         path = text("Private CSV destination", required=True)
+        from .csvio import export_csv
         console.print(str(export_csv(db, show["id"], path, selection)), markup=False)
     elif action == 5:
+        from .migration import migration_guidance
         console.print(migration_guidance(show), markup=False)
 
 
@@ -401,6 +404,7 @@ def _load_resume(db):
 
 
 def _save_resume(db, destination, overwrite, progress):
+    from .publisher import atomic_write
     atomic_write(_resume_path(db), json.dumps(
         {"destination": destination, "overwrite": overwrite, "progress": progress}, indent=2).encode())
 
@@ -422,6 +426,7 @@ def _finish_import(publisher, db, show, source):
     succeeds; if it fails, the show and feed are reported as saved locally
     with `termicast deploy <id>` as the retry command.
     """
+    from .migration import migration_guidance
     _clear_resume(db)
     if show.get("hosting") == "s3" and not show.get("enabled"):
         console.print("Uploading imported media to S3 (this always runs once after import, "
@@ -518,6 +523,7 @@ def _create_or_import(db, publisher, importing=False):
                                                       overwrite=overwrite)
         else:
             source = text("Existing feed (HTTPS URL or local XML path)", required=True)
+            from .importer import import_feed
             settings, template = import_feed(source)
             show = new_show(**settings)
             show.update(settings)
@@ -532,6 +538,7 @@ def _create_or_import(db, publisher, importing=False):
                 return
             from .importer import extract_episodes
             scheme, fallback = _choose_naming(extract_episodes(template), show)
+            from .importer import download_import
             show, episodes = download_import(show, template,
                                              review_optional=lambda episodes, root: _review_optional(episodes, root, show),
                                              resolve_optional=_resolve_optional,
@@ -660,6 +667,7 @@ def _validate(db, show_id):
         try:
             from .storage import asset_root
             path = asset_root(show) / "feed.xml"
+            from .feed import validate_feed
             errors = validate_feed(path.read_bytes())
         except Exception as exc:
             errors = [f"Cannot validate managed feed: {exc}"]
@@ -755,7 +763,7 @@ def main(argv=None):
         if args.command == "validate":
             return _validate(db, args.show_id)
         if args.command == "doctor":
-            from .hosting import summarize_verification_problems
+            from .hosting import doctor, summarize_verification_problems
             problems = doctor(db, args.show_id)
             if problems:
                 for line in summarize_verification_problems(problems, target="mixed"):
@@ -763,6 +771,7 @@ def main(argv=None):
                 return 1
             console.print("No hosting problems found.", style=ACCENT)
             return 0
+        from .publisher import Publisher
         publisher = Publisher(db)
         if args.command == "fix-host-mime":
             show = db.get_show(args.show_id)
@@ -804,9 +813,11 @@ def main(argv=None):
                           style=ACCENT)
             return 0
         if args.command == "import-csv":
+            from .csvio import import_csv
             console.print(f"Merged {import_csv(db, args.show_id, args.path)} episodes.")
             return 0
         if args.command == "export-csv":
+            from .csvio import export_csv
             console.print(str(export_csv(db, args.show_id, args.path, args.filter)), markup=False)
             return 0
         if args.command == "publish-due":

@@ -493,3 +493,24 @@ def test_delete_show_bucket_root_deletes_when_fully_confirmed(db, monkeypatch, t
 
     assert calls == [(True, True), (False, True)]
     assert db.get_show(show["id"]) is None
+
+
+def test_scriptable_commands_do_not_load_the_interactive_stack():
+    """`termicast publish-due` runs from cron and never draws a menu.
+
+    questionary/prompt_toolkit cost ~150 ms to import and rich.markdown
+    another ~45 ms. Importing them eagerly made every scriptable invocation
+    pay for machinery it never touches, so this pins the deferral.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, termicast.cli;"
+        "print(','.join(m for m in "
+        "('questionary','prompt_toolkit','rich.markdown','lxml.etree','PIL') "
+        "if m in sys.modules))"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "", f"eagerly imported: {result.stdout.strip()}"
