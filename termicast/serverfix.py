@@ -23,6 +23,8 @@ types {
     audio/mp4                 m4a;
     audio/mpeg                mp3;
     image/jpeg                jpg jpeg;
+    image/png                 png;
+    image/webp                webp;
 }
 """
 
@@ -34,6 +36,8 @@ AddType text/vtt .vtt
 AddType audio/mp4 .m4a
 AddType audio/mpeg .mp3
 AddType image/jpeg .jpg .jpeg
+AddType image/png .png
+AddType image/webp .webp
 """
 
 

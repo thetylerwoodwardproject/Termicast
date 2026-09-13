@@ -184,19 +184,28 @@ def extract_episodes(template, mapping=None):
 
 
 def _convert_import_artwork(path, url, review_artwork, kind=""):
-    """Normalize only the staged copy, after explicit conversion approval."""
+    """Normalize the staged copy to a flattened, correctly-sized RGB JPEG.
+
+    PNG artwork is always re-encoded to JPEG (smaller); JPEG artwork is only
+    touched when transparency or resizing requires it. Returns the final path,
+    which changes to a `.jpg` file when a PNG is transcoded.
+    """
     from PIL import Image, ImageOps
     from io import BytesIO
 
+    path = Path(path)
     with Image.open(path) as image:
         mode, format_name, size = image.mode, image.format, image.size
         image.verify()
+    if format_name not in ("JPEG", "PNG"):
+        return path  # The strict validator supplies the error for unsupported formats.
     resize = ((kind == "episode" and size != (3000, 3000)) or
               (kind == "show" and (size[0] != size[1] or not 1400 <= size[0] <= 3000)))
-    if format_name not in ("JPEG", "PNG") or (mode == "RGB" and not resize):
-        return
+    to_jpeg = format_name == "PNG"
+    if not to_jpeg and mode == "RGB" and not resize:
+        return path
     if review_artwork is None:
-        return  # The strict validator supplies the error for noninteractive callers.
+        return path  # The strict validator supplies the error for noninteractive callers.
     options = {"target_size": (3000, 3000)} if resize else {}
     if not review_artwork(url, format_name, mode, size, **options):
         # Do not let optional-resource recovery swallow cancellation.
@@ -211,8 +220,14 @@ def _convert_import_artwork(path, url, review_artwork, kind=""):
             converted = ImageOps.pad(converted, (3000, 3000), method=Image.Resampling.LANCZOS,
                                      color=(255, 255, 255))
         content = BytesIO()
-        converted.save(content, format_name)
+        converted.save(content, "JPEG", quality=90, optimize=True)
+    if to_jpeg:
+        new_path = path.with_suffix(".jpg")
+        atomic_write(new_path, content.getvalue())
+        path.unlink(missing_ok=True)
+        return new_path
     atomic_write(path, content.getvalue())
+    return path
 
 
 ASSET_ROLES = (("mp3_url", "audio_path"), ("artwork_url", "image_path"),
@@ -369,7 +384,12 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 mapping[url] = asset_base(show) + "/" + relative
                 local_paths[url] = path
             if kind:
-                _convert_import_artwork(path, url, review_artwork, kind=kind)
+                converted_path = _convert_import_artwork(path, url, review_artwork, kind=kind)
+                if converted_path != path:
+                    path = converted_path
+                    relative = path.relative_to(stage).as_posix()
+                    mapping[url] = asset_base(show) + "/" + relative
+                    local_paths[url] = path
                 validation.inspect_local_artwork(path, episode=kind == "episode", chapter=kind == "chapter")
             return mapping[url]
 

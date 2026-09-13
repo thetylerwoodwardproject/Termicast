@@ -253,8 +253,9 @@ for the current import and covers both color conversion and resizing. Transparen
 is flattened onto white. Episode images with incorrect dimensions and show images
 outside the required square 1400–3000 pixel range are resized to 3000×3000.
 Proportions are preserved, with white padding for non-square images; smaller
-images are enlarged. JPEG/PNG format is preserved. This
-also works for archive imports and converts only the staged copy.
+images are enlarged. PNG artwork is always re-encoded to a smaller JPEG
+(quality 90, optimized); JPEG artwork keeps its format unless it needs resizing.
+This also works for archive imports and converts only the staged copy.
 
 > [!IMPORTANT]
 > After importing, check that the new feed is publicly reachable, then ask

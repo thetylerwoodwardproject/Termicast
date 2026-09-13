@@ -52,9 +52,10 @@ def _artwork_reviewer():
 
     def review(url, format_name, mode, size, target_size=None):
         nonlocal automatic
+        note = " PNG will be converted to JPEG." if format_name == "PNG" else ""
         console.print(f"Artwork needs conversion\nSource: {url}\n"
                       f"Detected: {format_name}, {mode}, {size[0]}×{size[1]}\n"
-                      "Required: RGB. Transparency, if present, will be flattened onto white.",
+                      f"Required: RGB.{note} Transparency, if present, will be flattened onto white.",
                       markup=False)
         if target_size:
             console.print(f"Resize to {target_size[0]}×{target_size[1]}, preserving proportions. "

@@ -88,8 +88,8 @@ def test_artwork_auto_mode_is_per_import(tmp_path, monkeypatch):
     for index in range(2):
         path = tmp_path / f"{index}.png"
         Image.new("L", (10, 10), 120).save(path)
-        _convert_import_artwork(path, str(path), reviewer)
-        with Image.open(path) as image:
+        converted = _convert_import_artwork(path, str(path), reviewer)
+        with Image.open(converted) as image:
             assert image.mode == "RGB"
             assert image.getpixel((0, 0)) == (120, 120, 120)
     assert len(prompts) == 1
@@ -115,13 +115,14 @@ def test_download_import_checks_s3_before_clearing_previous_import(tmp_path, mon
     assert cleared == []
 
 
-def test_rgb_artwork_is_preserved(tmp_path):
+def test_rgb_jpeg_artwork_is_preserved(tmp_path):
     from termicast.importer import _convert_import_artwork
 
-    path = tmp_path / "rgb.png"
-    Image.new("RGB", (10, 10)).save(path)
+    path = tmp_path / "rgb.jpg"
+    Image.new("RGB", (10, 10)).save(path, "JPEG")
     original = path.read_bytes()
-    _convert_import_artwork(path, "image.png", lambda *args: pytest.fail("Unexpected prompt"))
+    result = _convert_import_artwork(path, "image.jpg", lambda *args: pytest.fail("Unexpected prompt"))
+    assert result == path
     assert path.read_bytes() == original
 
 
@@ -131,9 +132,9 @@ def test_converted_artwork_still_requires_valid_dimensions(tmp_path):
 
     path = tmp_path / "small.png"
     Image.new("RGBA", (10, 10)).save(path)
-    _convert_import_artwork(path, "small.png", lambda *args: True)
+    converted = _convert_import_artwork(path, "small.png", lambda *args: True)
     with pytest.raises(ValueError, match="Show artwork must be square"):
-        inspect_local_artwork(path)
+        inspect_local_artwork(converted)
 
 
 @pytest.mark.parametrize("kind", ["show", "episode"])
@@ -149,16 +150,17 @@ def test_rgb_artwork_resize_preserves_proportions(tmp_path, kind):
         approvals.append((size, target_size))
         return True
 
-    _convert_import_artwork(path, "wide.png", approve, kind=kind)
+    converted = _convert_import_artwork(path, "wide.png", approve, kind=kind)
     assert approvals == [((800, 400), (3000, 3000))]
-    inspect_local_artwork(path, episode=kind == "episode")
-    with Image.open(path) as image:
+    inspect_local_artwork(converted, episode=kind == "episode")
+    with Image.open(converted) as image:
         assert image.size == (3000, 3000)
-        assert image.getpixel((1500, 0)) == (255, 255, 255)
-        assert image.getpixel((1500, 749)) == (255, 255, 255)
-        assert image.getpixel((1500, 750)) == (255, 0, 0)
-        assert image.getpixel((1500, 2249)) == (255, 0, 0)
-        assert image.getpixel((1500, 2250)) == (255, 255, 255)
+        # JPEG is lossy, so assert bands rather than exact channel values.
+        for coord in ((1500, 0), (1500, 749), (1500, 2250)):
+            assert all(channel >= 220 for channel in image.getpixel(coord))
+        for coord in ((1500, 750), (1500, 2249)):
+            r, g, b = image.getpixel(coord)
+            assert r >= 180 and g <= 100 and b <= 100
 
 
 def test_auto_mode_also_approves_resizing(tmp_path, monkeypatch):

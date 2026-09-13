@@ -254,11 +254,11 @@ def test_import_artwork_conversion(tmp_path, monkeypatch, source_kind, action, a
         assert not (tmp_path / "out").exists()
     else:
         run()
-        images = list((tmp_path / "out").rglob("*.png"))
+        images = list((tmp_path / "out").rglob("*.jpg"))
         assert len(images) == 1
         with Image.open(images[0]) as image:
             expected_size = (1400, 1400) if artwork_kind == "show" else (3000, 3000)
-            assert (image.mode, image.format, image.size) == ("RGB", "PNG", expected_size)
+            assert (image.mode, image.format, image.size) == ("RGB", "JPEG", expected_size)
             assert image.getpixel((0, 0)) == (255, 255, 255)
     assert source.read_bytes() == original
     assert len(prompts) == 1

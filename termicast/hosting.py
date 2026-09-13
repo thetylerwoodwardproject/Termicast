@@ -8,7 +8,6 @@ bucket writes or deletes. Public verification is shared with S3 deployment.
 import json
 import shutil
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
 
 from .storage import asset_base, asset_root, feed_url
 
@@ -178,7 +177,7 @@ def check_assets(show, episodes) -> list[str]:
         if episode.get("mp3_url"):
             urls.append((episode["mp3_url"], content_type_for(episode["mp3_url"])))
         if episode.get("artwork_url"):
-            urls.append((episode["artwork_url"], "image/jpeg"))
+            urls.append((episode["artwork_url"], content_type_for(episode["artwork_url"]) or "image/jpeg"))
         if episode.get("transcript_url"):
             urls.append((episode["transcript_url"], "text/vtt"))
         if episode.get("chapters"):
@@ -211,35 +210,14 @@ def doctor(db, show_id=None) -> list[str]:
 
 def nginx_snippet(show) -> str:
     """Return a small, placement-specific nginx MIME-type snippet for base_url."""
-    path = urlsplit(show["base_url"]).path.rstrip("/") or "/"
-    return (
-        f"# Termicast hosting snippet for {show['base_url']}\n"
-        f"# Place inside the server/location block that maps {path} to the output directory.\n"
-        "# This only sets MIME types; it does not configure TLS, aliases, auth, or redirects.\n"
-        "types {\n"
-        "    application/rss+xml       xml;\n"
-        "    application/json+chapters json;\n"
-        "    text/vtt                  vtt;\n"
-        "    audio/mp4                 m4a;\n"
-        "    audio/mpeg                mp3;\n"
-        "    image/jpeg                jpg jpeg;\n"
-        "}\n"
-    )
+    from .serverfix import mime_snippet
+    return mime_snippet("Nginx")
 
 
 def apache_snippet(show) -> str:
     """Return a small, placement-specific Apache MIME-type snippet for base_url."""
-    return (
-        f"# Termicast hosting snippet for {show['base_url']}\n"
-        "# Place inside the <Directory> or <Location> block that maps the output directory.\n"
-        "# This only sets MIME types; it does not configure TLS, aliases, auth, or redirects.\n"
-        "AddType application/rss+xml       .xml\n"
-        "AddType application/json+chapters .json\n"
-        "AddType text/vtt                  .vtt\n"
-        "AddType audio/mp4                 .m4a\n"
-        "AddType audio/mpeg                .mp3\n"
-        "AddType image/jpeg                .jpg .jpeg\n"
-    )
+    from .serverfix import mime_snippet
+    return mime_snippet("Apache")
 
 
 def s3_write_policy_snippet(show) -> str:

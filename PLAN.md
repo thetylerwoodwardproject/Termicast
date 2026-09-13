@@ -211,12 +211,13 @@ Complete the work when the regression suite passes and review confirms preserved
 
 ### Reported behavior and correction
 
-The public server returned `text/xml; charset=utf-8` for `feed.xml` and `application/json` for chapter files. The expected mappings remain:
+The public server returned `text/xml; charset=utf-8` for `feed.xml`, `application/json` for chapter files, and `application/octet-stream` for PNG artwork (the site config has no `include mime.types`, so unlisted extensions fall back to octet-stream). The expected mappings are:
 
 - `feed.xml`: `application/rss+xml`.
 - Chapter JSON: `application/json+chapters`.
+- PNG artwork: `image/png` (plus `image/webp`); `image/jpeg` for JPEG.
 
-Keep these diagnostics rather than suppressing them or relaxing the expected MIME types. Offer a correction within Termicast instead of only directing the user to a snippet.
+Keep these diagnostics rather than suppressing them or relaxing the expected MIME types. Offer a correction within Termicast instead of only directing the user to a snippet. Import additionally normalizes artwork to a flattened, sized RGB JPEG (quality 90, optimized) so new imports carry smaller JPEG files; `check_assets` now derives the expected artwork type from the file extension.
 
 ### Implemented workflow
 

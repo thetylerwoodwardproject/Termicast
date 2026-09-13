@@ -127,7 +127,10 @@ def _backups(tmp_path, monkeypatch):
 
 def test_mime_snippet_content():
     assert "application/rss+xml" in serverfix.mime_snippet("Nginx")
+    assert "image/png" in serverfix.mime_snippet("Nginx")
+    assert "image/webp" in serverfix.mime_snippet("Nginx")
     assert "AddType application/json+chapters" in serverfix.mime_snippet("Apache")
+    assert "AddType image/png" in serverfix.mime_snippet("Apache")
 
 
 def test_insert_block_after_server_name():
