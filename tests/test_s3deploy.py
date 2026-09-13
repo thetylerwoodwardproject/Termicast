@@ -150,7 +150,8 @@ def test_deploy_paths_uploads_in_order(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"data")
     uploaded = []
-    monkeypatch.setattr(s3deploy, "upload_file", lambda show, local, rel, dry_run=False: uploaded.append(rel))
+    monkeypatch.setattr(s3deploy, "upload_file",
+                        lambda show, local, rel, dry_run=False, timeout=None: uploaded.append(rel))
     deploy_paths(show, ["audio/x.mp3", "chapters/x.json"], source_root=root, verify=False)
     assert uploaded == ["audio/x.mp3", "chapters/x.json"]
 
@@ -267,7 +268,7 @@ def test_deploy_paths_stops_on_failure(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"data")
 
-    def fail(show, local, rel, dry_run=False):
+    def fail(show, local, rel, dry_run=False, timeout=None):
         if rel == "audio/x.mp3":
             raise RuntimeError("upload failed")
         return None
@@ -406,3 +407,77 @@ def test_delete_prefix_raises_on_delete_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
     with pytest.raises(RuntimeError, match="s4cmd delete failed.*AccessDenied"):
         delete_prefix(show)
+
+
+def test_batches_group_by_folder_and_content_type():
+    """s4cmd joins basenames onto the target, so a batch needs one folder.
+
+    --API-ContentType also applies to the whole invocation, so a folder
+    holding both JPEG and PNG artwork has to split into two runs.
+    """
+    grouped = s3deploy.batches([
+        "audio/a.mp3", "audio/b.mp3",
+        "images/episodes/a.jpg", "images/episodes/b.png",
+        "chapters/a.json",
+    ])
+    assert grouped[("audio", "audio/mpeg")] == ["audio/a.mp3", "audio/b.mp3"]
+    assert grouped[("images/episodes", "image/jpeg")] == ["images/episodes/a.jpg"]
+    assert grouped[("images/episodes", "image/png")] == ["images/episodes/b.png"]
+    assert grouped[("chapters", "application/json+chapters")] == ["chapters/a.json"]
+
+
+def test_batches_reject_unmappable_content_type():
+    with pytest.raises(ValueError, match="No Content-Type mapping"):
+        s3deploy.batches(["audio/x.bin"])
+
+
+def test_upload_batch_sends_one_process_per_folder(tmp_path, monkeypatch):
+    """The whole point: one s4cmd process for a folder, not one per file."""
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "audio").mkdir(parents=True)
+    for name in ("a.mp3", "b.mp3", "c.mp3"):
+        (root / "audio" / name).write_bytes(b"data")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+
+    s3deploy.upload_batch(show, root, ["audio/a.mp3", "audio/b.mp3", "audio/c.mp3"], "audio/mpeg")
+
+    assert run.call_count == 1
+    args = run.call_args.args[0]
+    # Trailing slash is required, or s4cmd refuses a multi-source put.
+    assert args[-1] == "s3://my-bucket/my-show/audio/"
+    assert args[-4:-1] == [str(root / "audio" / name) for name in ("a.mp3", "b.mp3", "c.mp3")]
+    assert "--API-ContentType" in args and "audio/mpeg" in args
+
+
+def test_upload_batch_of_one_keeps_the_exact_object_key(tmp_path, monkeypatch):
+    """A single file still gets its full key, not a directory-plus-basename."""
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "chapters").mkdir(parents=True)
+    (root / "chapters" / "a.json").write_bytes(b"{}")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+
+    s3deploy.upload_batch(show, root, ["chapters/a.json"], "application/json+chapters")
+    assert run.call_args.args[0][-1] == "s3://my-bucket/my-show/chapters/a.json"
+
+
+def test_upload_batch_reports_nothing_uploaded_when_the_batch_fails(tmp_path, monkeypatch):
+    """A partly-failed batch must not be reported as uploaded.
+
+    upload_existing_assets deletes local copies of what deploy_paths says it
+    uploaded, so crediting a failed batch would delete media that never
+    reached the bucket.
+    """
+    show = s3_show(tmp_path)
+    root = tmp_path / "out"
+    (root / "audio").mkdir(parents=True)
+    for name in ("a.mp3", "b.mp3"):
+        (root / "audio" / name).write_bytes(b"data")
+    monkeypatch.setattr(s3deploy, "subprocess",
+                        Mock(run=Mock(return_value=subprocess.CompletedProcess([], 1, "", "boom")),
+                             DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="audio/a.mp3, audio/b.mp3"):
+        deploy_paths(show, ["audio/a.mp3", "audio/b.mp3"], source_root=root, verify=False)

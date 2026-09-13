@@ -1,12 +1,14 @@
 """Ordered, verified S3-compatible deployment using the external `s4cmd` tool.
 
 Credentials stay in `~/.s3cfg`; Termicast only supplies nonsecret destination
-settings. Uploads are serialized (one subprocess at a time) and use s4cmd's
-`--sync-check` md5 metadata so unchanged objects are skipped and multipart ETags
-are never treated as ordinary MD5 hashes.
+settings. Uploads are batched one `s4cmd put` per managed folder and run one
+subprocess at a time, and use s4cmd's `--sync-check` md5 metadata so unchanged
+objects are skipped and multipart ETags are never treated as ordinary MD5
+hashes. See `batches()` for why a folder is the unit.
 """
 
 import configparser
+from functools import lru_cache
 import io
 import os
 import secrets
@@ -14,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .media import content_type_for
 from .storage import asset_root
@@ -99,6 +101,7 @@ def write_s3cfg(access_key, secret_key, path=None):
     atomic_write(cfg_path, buffer.getvalue().encode(), mode=0o600)
 
 
+@lru_cache(maxsize=1)
 def s4cmd_path():
     """Resolve the s4cmd executable, preferring the active venv, then PATH."""
     candidate = Path(sys.executable).parent / "s4cmd"
@@ -154,6 +157,63 @@ def upload_file(show, local_path, remote_relative, dry_run=False, timeout=None):
             f"{_permission_help(show, message)}") from None
 
 
+def batches(relative_paths):
+    """Group managed paths into runs that one `s4cmd put` can carry.
+
+    s4cmd's multi-source put joins each source's BASENAME onto the target
+    directory (S3Handler.put_files), so a batch is only well defined when
+    every file in it lands in the same folder. --API-ContentType likewise
+    applies to the whole invocation, so the type has to be uniform too.
+    Grouping on both gives roughly one run per managed folder -- audio,
+    images/episodes, images/chapters, transcripts, chapters -- instead of
+    one process per file. Input order is preserved within and across groups.
+    """
+    groups = {}
+    for relative in relative_paths:
+        content_type = content_type_for(relative)
+        if content_type is None:
+            raise ValueError(
+                f"No Content-Type mapping for {relative}; use a supported "
+                "audio, image, transcript, chapter, or feed format")
+        key = (PurePosixPath(relative).parent.as_posix(), content_type)
+        groups.setdefault(key, []).append(relative)
+    for (folder, content_type), group in groups.items():
+        names = [PurePosixPath(relative).name for relative in group]
+        # Guaranteed by paths being unique within one folder, but the whole
+        # batch silently overwrites itself if it ever stops holding.
+        assert len(set(names)) == len(names), f"duplicate basenames in {folder}"
+    return groups
+
+
+def upload_batch(show, root, relatives, content_type, dry_run=False, timeout=None):
+    """Upload one batch of files in a single s4cmd process.
+
+    Spawning s4cmd per file meant importing boto3 before a byte moved; a
+    150-episode show republishing three assets each paid that ~450 times.
+    One process per folder also lets --num-threads do real work, since
+    put_files spreads a multi-source batch over its own thread pool.
+    """
+    root = Path(root)
+    for relative in relatives:
+        if not (root / relative).is_file():
+            raise ValueError(f"Upload source does not exist: {root / relative}")
+    if dry_run:
+        return
+    if len(relatives) == 1:
+        upload_file(show, root / relatives[0], relatives[0], timeout=timeout)
+        return
+    folder = PurePosixPath(relatives[0]).parent.as_posix()
+    prefix = object_key(show, folder if folder != "." else "")
+    target = f"s3://{show['bucket']}/{prefix.rstrip('/')}/" if prefix else f"s3://{show['bucket']}/"
+    args = s4cmd_args(show, content_type) + [str(root / relative) for relative in relatives] + [target]
+    process = _run(args, timeout=timeout)
+    if process.returncode != 0:
+        message = process.stderr.strip() or process.stdout.strip()
+        raise RuntimeError(
+            f"s4cmd upload failed for {len(relatives)} file(s) under {folder}: {message}"
+            f"{_permission_help(show, message)}") from None
+
+
 def _permission_help(show, message):
     """Append actionable guidance when an S3 error looks permission-related,
     so the fix is a paste-and-go step instead of a reverse-engineering exercise.
@@ -188,12 +248,15 @@ def deploy_paths(show, relative_paths, source_root=None, *, dry_run=False, verif
     root = Path(source_root) if source_root else asset_root(show)
     uploaded = []
     problems = []
-    for relative in relative_paths:
+    for (folder, content_type), group in batches(relative_paths).items():
         try:
-            upload_file(show, root / relative, relative, dry_run=dry_run)
-            uploaded.append(relative)
+            upload_batch(show, root, group, content_type, dry_run=dry_run)
+            uploaded.extend(group)
         except (ValueError, RuntimeError) as exc:
-            problems.append(f"{relative}: {exc}")
+            # No partial credit: a failed batch reports nothing uploaded, so
+            # upload_existing_assets cannot delete a local file whose object
+            # may never have landed. The raise below stops it regardless.
+            problems.append(f"{', '.join(group)}: {exc}")
             break
     if verify and not dry_run:
         from .hosting import check_url
