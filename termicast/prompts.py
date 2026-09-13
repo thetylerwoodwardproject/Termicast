@@ -60,7 +60,7 @@ def show_summary(db, show):
     scheduled = sum(1 for e in episodes if e.get("status") == "scheduled")
     from .storage import asset_root
     feed_present = (asset_root(show) / "feed.xml").is_file()
-    hosting = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
+    hosting = hosting_label(show)
     body = Text("\n").join([
         Text(str(show["title"]), style=f"bold {ACCENT}"),
         Text(f"Episodes: {len(episodes)}"),
@@ -122,6 +122,17 @@ SHOW_ESSENTIALS = (
 )
 
 S3_SETTINGS = ("endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")
+
+# Everything that describes where a show is published, for carrying a
+# destination onto a freshly imported show.
+DESTINATION_SETTINGS = ("hosting",) + S3_SETTINGS
+
+DEPLOYED = "Deployed."
+DRY_RUN_DONE = "Dry run complete: no uploads or bucket probes were made."
+
+
+def hosting_label(show) -> str:
+    return "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
 
 EXPORT_NOTICE = (
     "Smaller files help listeners on slower connections and reduce hosting bandwidth. "
@@ -1159,7 +1170,8 @@ def correct_host_mime(db, show):
 
 def hosting_menu(db, publisher, show):
     """Hosting submenu: setup, deploy, checks, and guidance."""
-    from .hosting import doctor, nginx_snippet, apache_snippet, s3_write_policy_snippet
+    from .hosting import (apache_snippet, doctor, is_mime_problem, nginx_snippet,
+                          s3_write_policy_snippet)
     while True:
         action = menu("Hosting", ["Configure hosting", "Deploy", "Deploy (dry run)",
                                   "Hosting checks (doctor)", "Nginx MIME snippet",
@@ -1181,18 +1193,17 @@ def hosting_menu(db, publisher, show):
                 console.print("Hosting settings saved.", style=ACCENT)
             elif action == 2:
                 publisher.deploy(show["id"])
-                console.print("Deployed.", style=ACCENT)
+                console.print(DEPLOYED, style=ACCENT)
             elif action == 3:
                 publisher.deploy(show["id"], dry_run=True)
-                console.print("Dry run complete: no uploads or bucket probes were made.", style=ACCENT)
+                console.print(DRY_RUN_DONE, style=ACCENT)
             elif action == 4:
                 problems = doctor(db, show["id"])
                 if problems:
                     from .hosting import summarize_verification_problems
                     for line in summarize_verification_problems(problems, target="mixed"):
                         warning(line)
-                    if any("Unexpected Content-Type " in p or "Missing Content-Type " in p
-                           for p in problems):
+                    if any(is_mime_problem(p) for p in problems):
                         if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
                             correct_host_mime(db, show)
                 else:
@@ -1219,7 +1230,7 @@ def hosting_menu(db, publisher, show):
             console.print("Cancelled. Hosting settings are unchanged.")
         except Exception as exc:
             error(f"Hosting action failed: {exc}")
-            if action == 2 and ("Unexpected Content-Type " in str(exc) or "Missing Content-Type " in str(exc)):
+            if action == 2 and is_mime_problem(exc):
                 try:
                     if confirm("Check this host for Nginx/Apache and correct MIME settings?", False):
                         correct_host_mime(db, show)

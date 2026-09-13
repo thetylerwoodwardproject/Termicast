@@ -58,6 +58,17 @@ def check_url(url, expected_content_type=None) -> list[str]:
 
 _MIME_MARKERS = ("Unexpected Content-Type ", "Missing Content-Type ")
 
+
+def is_mime_problem(text) -> bool:
+    """True when a problem string or exception describes a Content-Type fault.
+
+    The markers have to match what check_url() emits above exactly, or the
+    offer to correct the host's MIME settings silently stops appearing.
+    Callers ask through here so there is only one copy to keep in step.
+    """
+    text = str(text)
+    return any(marker in text for marker in _MIME_MARKERS)
+
 _MIME_GUIDANCE = {
     "local": (
         "Content-Type mismatches usually mean the web server is serving the wrong MIME "

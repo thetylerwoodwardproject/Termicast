@@ -18,6 +18,7 @@ from .prompts import (
     ACCENT, confirm, console, edit_field, error, menu, show_banner, show_form, show_summary, text,
     warning, menu_utilities, show_faq, Cancelled, ExitRequested, edit_episode_form,
     optional_assets, add_episode, episode_form, hosting_menu,
+    DEPLOYED, DRY_RUN_DONE, DESTINATION_SETTINGS, hosting_label,
 )
 
 # .feed, .publisher, .importer and friends pull in lxml and the rest of the
@@ -455,8 +456,7 @@ def _create_or_import(db, publisher, importing=False):
         resumed = _load_resume(db)
         if resumed is not None:
             saved_destination, saved_overwrite, saved_progress = resumed
-            hosting_label = ("S3-compatible storage" if saved_destination.get("hosting") == "s3"
-                             else "Local web server")
+            saved_hosting = hosting_label(saved_destination)
             if saved_progress is None:
                 console.print(
                     f"Found a saved import setup from an older version: output dir "
@@ -476,7 +476,7 @@ def _create_or_import(db, publisher, importing=False):
                 console.print(
                     f"Found a saved import setup: output dir "
                     f"{saved_destination.get('output_dir') or '(not set)'}, hosting: "
-                    f"{hosting_label}. Import source is next.", markup=False)
+                    f"{saved_hosting}. Import source is next.", markup=False)
             if confirm("Resume this setup instead of starting over?", True):
                 destination, overwrite = saved_destination, saved_overwrite
                 if saved_progress is None or saved_progress == "output":
@@ -510,7 +510,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")})
+                         if key in DESTINATION_SETTINGS})
             show = show_form(show)
             if show is None:
                 return
@@ -532,7 +532,7 @@ def _create_or_import(db, publisher, importing=False):
             show["output_dir"] = destination["output_dir"]
             show["base_url"] = destination["base_url"]
             show.update({key: value for key, value in destination.items()
-                         if key in ("hosting", "endpoint_url", "bucket", "prefix", "asset_base_url", "enabled", "keep_local_media", "mirror_feed")})
+                         if key in DESTINATION_SETTINGS})
             show = show_form(show)
             if show is None:
                 return
@@ -550,8 +550,7 @@ def _create_or_import(db, publisher, importing=False):
         if show is None:
             return
     show = db.save_show(show, template=template, episodes=episodes)
-    hosting_label = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
-    console.print(f"Hosting: {hosting_label}.", style=ACCENT, markup=False)
+    console.print(f"Hosting: {hosting_label(show)}.", style=ACCENT, markup=False)
     if show.get("hosting") == "s3":
         bucket = show.get("bucket", "")
         prefix = show.get("prefix", "")
@@ -794,8 +793,8 @@ def main(argv=None):
             try:
                 publisher.deploy(args.show_id, dry_run=args.dry_run, verify=not args.no_verify)
             except RuntimeError as exc:
-                if args.dry_run or args.no_verify or not any(
-                        marker in str(exc) for marker in ("Unexpected Content-Type ", "Missing Content-Type ")):
+                from .hosting import is_mime_problem
+                if args.dry_run or args.no_verify or not is_mime_problem(exc):
                     raise
                 error(exc)
                 console.print(f"Open the guided host correction with: termicast fix-host-mime {args.show_id}", markup=False)
@@ -809,8 +808,7 @@ def main(argv=None):
                     console.print("Correction cancelled; deployment verification failed.")
                 # A repair does not complete a partially failed deployment.
                 return 1
-            console.print("Deployed." if not args.dry_run else "Dry run complete: no uploads or bucket probes were made.",
-                          style=ACCENT)
+            console.print(DEPLOYED if not args.dry_run else DRY_RUN_DONE, style=ACCENT)
             return 0
         if args.command == "import-csv":
             from .csvio import import_csv
