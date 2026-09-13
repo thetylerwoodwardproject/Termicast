@@ -46,11 +46,11 @@ def atomic_write(path, data, mode=0o644):
 
 
 def operation_lock(show):
-    return filesystem_lock(Path(show["output_dir"]) / ".termicast.oplock")
+    return filesystem_lock(asset_root(show) / ".termicast.oplock")
 
 
 def output_lock(show):
-    return filesystem_lock(Path(show["output_dir"]) / ".termicast.lock")
+    return filesystem_lock(asset_root(show) / ".termicast.lock")
 
 
 def episode_asset_paths(episode, show=None):
@@ -248,7 +248,7 @@ class Publisher:
         show = self.db.get_show(show_id)
         if show is None:
             raise ValueError("Unknown podcast ID")
-        Path(show["output_dir"]).expanduser().absolute().mkdir(parents=True, exist_ok=True)
+        asset_root(show).mkdir(parents=True, exist_ok=True)
         with operation_lock(show):
             with self.db.lock():
                 episodes = [e for e in self.db.list_episodes(show_id) if e["status"] == "published"]
@@ -307,7 +307,7 @@ class Publisher:
             show = self.db.get_show(show_id)
             if show is None:
                 raise ValueError("Unknown podcast ID")
-        Path(show["output_dir"]).expanduser().absolute().mkdir(parents=True, exist_ok=True)
+        asset_root(show).mkdir(parents=True, exist_ok=True)
         with operation_lock(show):
             with self.db.lock():
                 snapshot = self._snapshot(show_id, now, include_due, release_guids)
@@ -318,7 +318,7 @@ class Publisher:
             if show.get("hosting") == "s3" and show.get("enabled"):
                 self._deploy_remote(snapshot, show)
             with output_lock(show):
-                atomic_write(Path(show["output_dir"]) / "feed.xml", snapshot["data"])
+                atomic_write(asset_root(show) / "feed.xml", snapshot["data"])
             if show.get("hosting") == "s3" and show.get("enabled") and show.get("mirror_feed"):
                 try:
                     mirror_feed(show)

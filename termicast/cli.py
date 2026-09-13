@@ -658,7 +658,8 @@ def _validate(db, show_id):
     for show in shows:
         label = f"{show.get('title', show['id'])} ({show['id']})"
         try:
-            path = Path(show["output_dir"]).expanduser() / "feed.xml"
+            from .storage import asset_root
+            path = asset_root(show) / "feed.xml"
             errors = validate_feed(path.read_bytes())
         except Exception as exc:
             errors = [f"Cannot validate managed feed: {exc}"]

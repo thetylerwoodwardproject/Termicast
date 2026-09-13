@@ -56,7 +56,8 @@ def show_summary(db, show):
     from pathlib import Path
     episodes = db.list_episodes(show["id"])
     scheduled = sum(1 for e in episodes if e.get("status") == "scheduled")
-    feed_present = (Path(show["output_dir"]).expanduser() / "feed.xml").is_file()
+    from .storage import asset_root
+    feed_present = (asset_root(show) / "feed.xml").is_file()
     hosting = "S3-compatible storage" if show.get("hosting") == "s3" else "Local web server"
     body = Text("\n").join([
         Text(str(show["title"]), style=f"bold {ACCENT}"),

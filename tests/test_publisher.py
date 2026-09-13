@@ -5,7 +5,7 @@ import pytest
 from lxml import etree
 
 from termicast.publisher import Publisher
-from termicast.models import new_episode
+from termicast.models import new_episode, new_show
 
 
 @pytest.fixture(autouse=True)
@@ -436,3 +436,28 @@ def test_s3_publish_preflights_access_before_upload(db, show, monkeypatch):
     monkeypatch.setattr(s3deploy, "deploy_paths", lambda s, paths, dry_run=False, verify=True: list(paths))
     Publisher(db).publish(show["id"], make_episode())
     assert len(checks) == 1
+
+
+def test_locks_live_under_asset_root_for_a_tilde_output_dir(tmp_path, monkeypatch):
+    """Lock files must sit beside the assets they guard, not in a literal `~`.
+
+    save_show() normalizes output_dir, so this is not reachable from the CLI
+    today, but a show dict that reaches a lock without being saved first used
+    to build `./~/podcast/.termicast.oplock` relative to the CWD -- a
+    different path than asset_root(), which defeats the mutual exclusion.
+    """
+    from termicast.publisher import operation_lock, output_lock
+    from termicast.storage import asset_root
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    show = new_show(title="S", description="d", base_url="https://e.org/s",
+                    output_dir="~/podcast")
+    root = asset_root(show)
+    root.mkdir(parents=True)
+
+    with operation_lock(show), output_lock(show):
+        pass
+
+    assert (root / ".termicast.oplock").is_file()
+    assert (root / ".termicast.lock").is_file()
+    assert not (Path.cwd() / "~").exists()

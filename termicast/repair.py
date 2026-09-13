@@ -21,7 +21,7 @@ def scan_show(db, show_id):
         episodes = db.list_episodes(show_id)
         with db.connection() as conn:
             template = conn.execute("SELECT template FROM shows WHERE id=?", (show_id,)).fetchone()[0]
-    output = Path(show["output_dir"])
+    output = asset_root(show)
     issues, missing = [], []
     for episode in episodes:
         issues.extend(f"{episode['guid']}: {error}" for error in validate_episode(episode))
@@ -81,7 +81,7 @@ def repair_show(db, scan, recoveries=None, output_dir=None):
     # being corrected the old and the new one are both claimed here, always in
     # that order. The lock file needs its directory to exist; `_write` creates
     # it the same way.
-    current = Path(show["output_dir"]).expanduser().absolute()
+    current = asset_root(show)
     for directory in (current, output):
         directory.mkdir(parents=True, exist_ok=True)
     with operation_lock({"output_dir": str(current)}), \

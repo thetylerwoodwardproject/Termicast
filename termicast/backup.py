@@ -38,7 +38,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                 raise ValueError("Backups must be outside every podcast's public asset directory")
             if assets.is_symlink():
                 raise ValueError("Refusing symbolic-link asset directory")
-            output = Path(show["output_dir"])
+            output = asset_root(show)
             if destination.is_relative_to(output.resolve()):
                 raise ValueError("Backups must be outside every podcast's public output directory")
             if output.is_symlink():
@@ -64,7 +64,7 @@ def create_backup(db, destination=None, include_media=False, *, _locked=False):
                 with ZipFile(handle, "w", compression=ZIP_DEFLATED) as archive:
                     archive.write(snapshot, "termicast.db")
                     for show in shows:
-                        output = Path(show["output_dir"])
+                        output = asset_root(show)
                         prefix = f"outputs/{show['id']}"
                         manifest["shows"].append({"id": show["id"], "title": show["title"],
                                                   "output_dir": str(output), "archive_dir": prefix})
