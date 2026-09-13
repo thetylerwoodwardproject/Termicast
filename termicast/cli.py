@@ -150,9 +150,10 @@ def _check_repair(db, show):
     destination = output_dir or show["output_dir"]
     console.print(f"Regenerate: {destination}/feed.xml and saved chapter JSON\nPublic base URL: {show['base_url']}", markup=False)
     for target, source in recoveries.items():
-        from .storage import asset_root, asset_base
+        from .storage import asset_root, asset_url
         relative = Path(target).relative_to(asset_root(show))
-        console.print(f"Copy {source} -> {asset_root(show) / relative}\nURL: {asset_base(show)}/{relative.as_posix()}", markup=False)
+        console.print(f"Copy {source} -> {asset_root(show) / relative}\n"
+                      f"URL: {asset_url(show, relative.as_posix())}", markup=False)
     if not confirm("Back up saved state/feeds/chapters and regenerate WITHOUT releasing scheduled episodes?", False):
         return
     from .repair import repair_show
@@ -424,6 +425,22 @@ def _finish_import(publisher, db, show, source):
     console.print(migration_guidance(show, source), markup=False)
 
 
+def _staged_show(settings, destination):
+    """Build a new show from imported identity, pointed at the chosen location.
+
+    The archive and feed branches assembled this identically; a destination
+    field added to one and missed in the other would silently not carry over.
+    Returns None when the user backs out of the settings form.
+    """
+    show = new_show(**settings)
+    show.update(settings)
+    show["output_dir"] = destination["output_dir"]
+    show["base_url"] = destination["base_url"]
+    show.update({key: value for key, value in destination.items()
+                 if key in DESTINATION_SETTINGS})
+    return show_form(show)
+
+
 def _create_or_import(db, publisher, importing=False):
     source = ""
     template = None
@@ -483,14 +500,7 @@ def _create_or_import(db, publisher, importing=False):
         if kind == 2:
             manifest = text("Archive manifest path (manifest.json)", required=True)
             from .archive import archive_identity, import_archive
-            settings = archive_identity(manifest)
-            show = new_show(**settings)
-            show.update(settings)
-            show["output_dir"] = destination["output_dir"]
-            show["base_url"] = destination["base_url"]
-            show.update({key: value for key, value in destination.items()
-                         if key in DESTINATION_SETTINGS})
-            show = show_form(show)
+            show = _staged_show(archive_identity(manifest), destination)
             if show is None:
                 return
             from .archive import load_manifest, merged_template
@@ -504,15 +514,9 @@ def _create_or_import(db, publisher, importing=False):
             source = text("Existing feed (HTTPS URL or local XML path)", required=True)
             from .importer import import_feed
             settings, template = import_feed(source)
-            show = new_show(**settings)
-            show.update(settings)
             console.print("Choose the NEW hosting location; imported identity and XML are retained.",
                           style=ACCENT)
-            show["output_dir"] = destination["output_dir"]
-            show["base_url"] = destination["base_url"]
-            show.update({key: value for key, value in destination.items()
-                         if key in DESTINATION_SETTINGS})
-            show = show_form(show)
+            show = _staged_show(settings, destination)
             if show is None:
                 return
             from .importer import extract_episodes

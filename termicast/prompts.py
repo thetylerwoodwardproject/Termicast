@@ -909,9 +909,9 @@ def optional_assets(episode, show):
                 episode.setdefault("_replace_fields", []).append("chapters")
         elif action == 3:
             value = check_vtt(read_asset(text("VTT path or HTTPS URL", required=True)))
-            from .storage import asset_base, asset_root
+            from .storage import asset_root, asset_url
             filename = chapters_relative(episode).split("/", 1)[1]
-            url = asset_base(show) + "/transcripts/" + filename
+            url = asset_url(show, "transcripts/" + filename)
             console.print(f"On save: {asset_root(show)}/transcripts/{filename}\nPublic URL: {url}", markup=False)
             if confirm("Save this transcript with the episode?", False):
                 episode.update(transcript_url=url, _transcript_vtt=value)
@@ -959,7 +959,8 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
     Add episode action. Audio is required; artwork and transcript are optional.
     """
     from .media import identify_files, prepare_media
-    from .storage import asset_base
+    from .models import ASSET_ROLES
+    from .storage import asset_url
 
     roles = identify_files(files)
     audio_preset = audio_preset or show.get("audio_preset", "standard")
@@ -981,16 +982,13 @@ def add_episode(db, publisher, show, files, *, slug=None, audio_preset=None, ima
                              keep_image=keep_image, progress=True)
     review("Prepared media", prepared.review())
     episode.update(slug=chosen_slug)
-    episode["mp3_url"] = asset_base(show) + "/" + prepared.audio_relative
     episode["length"] = prepared.audio_after
     episode["duration"] = prepared.audio_meta["duration"]
-    episode["audio_path"] = prepared.audio_relative
-    if prepared.image_relative:
-        episode["artwork_url"] = asset_base(show) + "/" + prepared.image_relative
-        episode["image_path"] = prepared.image_relative
-    if prepared.transcript_relative:
-        episode["transcript_url"] = asset_base(show) + "/" + prepared.transcript_relative
-        episode["transcript_path"] = prepared.transcript_relative
+    staged = (prepared.audio_relative, prepared.image_relative, prepared.transcript_relative)
+    for relative, (url_field, path_field) in zip(staged, ASSET_ROLES):
+        if relative:
+            episode[url_field] = asset_url(show, relative)
+            episode[path_field] = relative
 
     for field in ("title", "description"):
         try:

@@ -15,7 +15,7 @@ from .database import filesystem_lock
 from .feed import render_feed
 from .validation import validate_episode
 from .models import ASSET_ROLES, chapters_relative, transcript_relative
-from .storage import asset_root, asset_base, local_relative
+from .storage import asset_root, asset_base, asset_url, local_relative
 
 
 def fsync_dir(path):
@@ -281,9 +281,9 @@ class Publisher:
             if verify and not dry_run:
                 from .hosting import check_url
                 from .media import content_type_for
-                problems = list(check_url(asset_base(show) + "/feed.xml", "application/rss+xml"))
+                problems = list(check_url(asset_url(show, "feed.xml"), "application/rss+xml"))
                 for relative in sorted(assets):
-                    problems.extend(check_url(asset_base(show) + "/" + relative, content_type_for(relative)))
+                    problems.extend(check_url(asset_url(show, relative), content_type_for(relative)))
                 if problems:
                     from .hosting import summarize_verification_problems
                     raise RuntimeError("\n".join(summarize_verification_problems(problems, target="local")))

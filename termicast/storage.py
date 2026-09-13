@@ -70,6 +70,11 @@ def asset_base(show):
     return show["base_url"].rstrip("/")
 
 
+def asset_url(show, relative):
+    """Public URL for a managed relative path. The inverse of local_relative."""
+    return f"{asset_base(show)}/{relative}"
+
+
 def local_relative(show, url):
     """Relative asset path for a public URL of this show, or None if foreign.
 

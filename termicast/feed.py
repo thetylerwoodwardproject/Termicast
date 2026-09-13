@@ -11,7 +11,7 @@ from uuid import UUID
 from lxml import etree
 from .models import chapters_relative
 from .media import ENCLOSURE_TYPES
-from .storage import asset_base
+from .storage import asset_base, asset_url
 
 
 NS = {
@@ -281,7 +281,7 @@ def render_feed(show: dict, template: bytes | None, episodes: list[dict],
             _put(item, "podcast:soundbite", soundbite.get("title", ""),
                  startTime=_seconds(soundbite["startTime"]), duration=_seconds(soundbite["duration"]))
         if episode.get("chapters"):
-            _put(item, "podcast:chapters", url=asset_base(show) + "/" + chapters_relative(episode),
+            _put(item, "podcast:chapters", url=asset_url(show, chapters_relative(episode)),
                  type="application/json+chapters")
             chapters = _put(item, "psc:chapters", version="1.2")
             for chapter in episode["chapters"]:

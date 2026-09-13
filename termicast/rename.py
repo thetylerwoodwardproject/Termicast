@@ -15,7 +15,7 @@ from pathlib import Path
 from .models import (ASSET_ROLES, chapter_image_relative, chapters_relative,
                      slug_error, transcript_relative)
 from .publisher import fsync_dir, operation_lock, output_lock
-from .storage import MANAGED_FOLDERS, asset_base, asset_root, local_relative
+from .storage import MANAGED_FOLDERS, asset_base, asset_root, asset_url, local_relative
 from .validation import validate_episode
 
 # The managed asset folders, matching the set repair.scan_show enforces.
@@ -104,7 +104,7 @@ def plan_rename(show, episode, new_slug, others=()):
         else:
             plan.moves.append((relative, new_relative))
         plan.fields[path_field] = new_relative
-        new_url = asset_base(show) + "/" + new_relative
+        new_url = asset_url(show, new_relative)
         plan.fields[field] = new_url
         if url:
             plan.url_changes.append((url, new_url))
@@ -151,7 +151,7 @@ def plan_rename(show, episode, new_slug, others=()):
             continue
         else:
             plan.moves.append((relative, new_relative))
-        new_url = asset_base(show) + "/" + new_relative
+        new_url = asset_url(show, new_relative)
         img_updates[img] = new_url
         plan.url_changes.append((img, new_url))
         for key, value in (show.get("import_url_map") or {}).items():

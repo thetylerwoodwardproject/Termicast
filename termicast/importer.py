@@ -323,7 +323,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
     errors = validation.validate_show(show)
     if errors:
         raise ValueError("; ".join(errors))
-    from .storage import asset_root, asset_base
+    from .storage import asset_root, asset_base, asset_url
     output = Path(show["output_dir"]).expanduser().absolute()
     assets = asset_root(show)
     if (not show.get("hosting") and output.exists()) or output.is_symlink():
@@ -373,7 +373,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
-                mapping[url] = asset_base(show) + "/" + relative
+                mapping[url] = asset_url(show, relative)
                 local_paths[url] = path
             elif require_preseed:
                 raise ValueError(f"Archive is missing a staged asset for {url}")
@@ -391,14 +391,14 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
                 except Exception:
                     path.unlink(missing_ok=True)
                     raise
-                mapping[url] = asset_base(show) + "/" + relative
+                mapping[url] = asset_url(show, relative)
                 local_paths[url] = path
             if kind:
                 converted_path = _convert_import_artwork(path, url, review_artwork, kind=kind)
                 if converted_path != path:
                     path = converted_path
                     relative = path.relative_to(stage).as_posix()
-                    mapping[url] = asset_base(show) + "/" + relative
+                    mapping[url] = asset_url(show, relative)
                     local_paths[url] = path
                 validation.inspect_local_artwork(path, episode=kind == "episode", chapter=kind == "chapter")
             return mapping[url]
@@ -452,7 +452,7 @@ def download_import(show, template, review_optional=None, resolve_optional=None,
             os.replace(path, target)
             local_paths[url] = target
             relative = target.relative_to(stage).as_posix()
-            mapping[url] = asset_base(show) + "/" + relative
+            mapping[url] = asset_url(show, relative)
             return relative
 
         def source_for(public_url):
