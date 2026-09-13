@@ -8,7 +8,7 @@ from termicast import s3deploy
 from termicast.models import new_show
 from termicast.s3deploy import (
     object_key, s4cmd_args, upload_file, deploy_paths, remote_rename, check_s3_destination,
-    check_s3_access, s3_credentials_present, write_s3cfg,
+    check_s3_access, s3_credentials_present, write_s3cfg, delete_prefix,
 )
 
 
@@ -318,3 +318,77 @@ def test_write_s3cfg_content_is_readable_by_s3_credentials_present(tmp_path):
     assert "my-access-key" in content
     assert "my-secret-key" in content
     assert "[default]" in content
+
+
+def _with_credentials(monkeypatch):
+    monkeypatch.setenv("S3_ACCESS_KEY", "AKIA...")
+    monkeypatch.setenv("S3_SECRET_KEY", "shh")
+
+
+def test_delete_prefix_refuses_without_prefix(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    show["prefix"] = ""
+    run = Mock()
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(ValueError, match="no prefix"):
+        delete_prefix(show)
+    run.assert_not_called()
+
+
+def test_delete_prefix_returns_zero_when_empty(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    empty = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(return_value=empty)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show) == 0
+    assert run.call_count == 1
+    assert run.call_args_list[0].args[0][1] == "ls"
+
+
+def test_delete_prefix_dry_run_lists_but_does_not_delete(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "my-show/audio/a.mp3\nmy-show/audio/b.mp3\n", "")
+    run = Mock(return_value=listing)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show, dry_run=True) == 2
+    assert run.call_count == 1
+
+
+def test_delete_prefix_deletes_recursively_when_nonempty(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "my-show/audio/a.mp3\n", "")
+    ok = subprocess.CompletedProcess([], 0, "", "")
+    run = Mock(side_effect=[listing, ok])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    assert delete_prefix(show) == 1
+    assert run.call_count == 2
+    assert run.call_args_list[0].args[0][1] == "ls"
+    del_args = run.call_args_list[1].args[0]
+    assert del_args[1] == "del"
+    assert "--recursive" in del_args
+    assert "--endpoint-url" in del_args and "https://s3.example.org" in del_args
+    assert del_args[-1] == "s3://my-bucket/my-show/"
+
+
+def test_delete_prefix_reports_listing_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    failed = subprocess.CompletedProcess([], 1, "", "Unable to locate credentials")
+    run = Mock(return_value=failed)
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="Could not list.*Unable to locate credentials"):
+        delete_prefix(show)
+
+
+def test_delete_prefix_raises_on_delete_failure(tmp_path, monkeypatch):
+    show = s3_show(tmp_path)
+    _with_credentials(monkeypatch)
+    listing = subprocess.CompletedProcess([], 0, "my-show/audio/a.mp3\n", "")
+    denied = subprocess.CompletedProcess([], 1, "", "AccessDenied")
+    run = Mock(side_effect=[listing, denied])
+    monkeypatch.setattr(s3deploy, "subprocess", Mock(run=run, DEVNULL=subprocess.DEVNULL))
+    with pytest.raises(RuntimeError, match="s4cmd delete failed.*AccessDenied"):
+        delete_prefix(show)

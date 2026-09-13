@@ -319,3 +319,39 @@ def check_s3_access(show):
         raise RuntimeError(
             f"S3 credentials are not configured; expected them in {s3cfg_path()} "
             "(or via S3_ACCESS_KEY/S3_SECRET_KEY). Configure hosting first.")
+
+
+def delete_prefix(show, dry_run=False):
+    """Delete every object under this show's S3 prefix; returns the object count.
+
+    Refuses outright when the show has no prefix: an empty prefix means the
+    show is hosted at the bucket root, and a recursive delete there would
+    destroy the whole bucket instead of just this show's content.
+    """
+    if not show.get("prefix"):
+        raise ValueError(
+            "Refusing to delete S3 objects: this show has no prefix, so a "
+            "recursive delete would target the entire bucket. Clean up the "
+            "bucket manually.")
+    check_s3_access(show)
+    process = _list_destination(show)
+    if process.returncode != 0:
+        message = process.stderr.strip() or process.stdout.strip()
+        raise RuntimeError(
+            f"Could not list the S3 destination to delete it: {message}"
+            f"{_permission_help(show, message)}") from None
+    count = len([line for line in process.stdout.splitlines() if line.strip()])
+    if count == 0 or dry_run:
+        return count
+    remote = f"s3://{show['bucket']}/{object_key(show, '')}"
+    args = [s4cmd_path(), "del", "--recursive"]
+    if show.get("endpoint_url"):
+        args += ["--endpoint-url", show["endpoint_url"]]
+    args.append(remote)
+    process = _run(args)
+    if process.returncode != 0:
+        message = process.stderr.strip() or process.stdout.strip()
+        raise RuntimeError(
+            f"s4cmd delete failed for {remote}: {message}"
+            f"{_permission_help(show, message)}") from None
+    return count

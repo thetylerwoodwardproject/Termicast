@@ -7,6 +7,7 @@ stays on the web server and references those S3 URLs. `output_dir` is the local
 directory that holds `feed.xml` and the working copy of the assets.
 """
 
+import shutil
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -15,6 +16,41 @@ from .validation import validate_https
 
 def asset_root(show):
     return Path(show["output_dir"]).expanduser().absolute()
+
+
+def local_delete_targets(show):
+    """Existing local paths that "Delete podcast" would remove.
+
+    Only paths Termicast itself is known to create -- the managed asset
+    folders, the feed, and its lock files (`publisher.operation_lock`/
+    `output_lock`) -- are ever considered here, so an output_dir shared with
+    unrelated files is left otherwise untouched.
+    """
+    from .rename import MANAGED_FOLDERS
+    root = asset_root(show)
+    names = list(MANAGED_FOLDERS) + ["feed.xml", ".termicast.oplock", ".termicast.lock"]
+    return [path for path in (root / name for name in names) if path.exists()]
+
+
+def delete_local_assets(show, dry_run=False):
+    """Remove the paths from `local_delete_targets`, then the directory if now empty.
+
+    A directory that still holds unrelated files (explicitly supported --
+    Termicast never assumes it owns the whole output_dir) is left in place.
+    """
+    targets = local_delete_targets(show)
+    if dry_run:
+        return targets
+    for path in targets:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    try:
+        asset_root(show).rmdir()
+    except OSError:
+        pass
+    return targets
 
 
 def feed_url(show):

@@ -118,7 +118,8 @@ When you run `termicast`, you see:
 2. Import existing podcast
 3. Create podcast
 4. Forget podcast
-5. Quit
+5. Delete podcast
+6. Quit
 ```
 
 | Option | What it does |
@@ -127,7 +128,10 @@ When you run `termicast`, you see:
 | **2. Import existing podcast** | Bring in a podcast you already host somewhere else |
 | **3. Create podcast** | Start a brand-new show |
 | **4. Forget podcast** | Remove a show from Termicast (keeps your files) |
-| **5. Quit** | Exit |
+| **5. Delete podcast** | Permanently delete a show: local media/feed files, any S3 objects under its bucket/prefix, and the show itself. Cannot be undone. |
+| **6. Quit** | Exit |
+
+**Delete podcast** is the destructive option: it removes everything **Forget podcast** leaves behind. It shows you exactly what will be deleted (local paths, and an S3 object count if the show is S3-hosted or mirrors its feed there), then requires you to type the show's ID before it proceeds. If it can't verify something up front — for example, missing or invalid S3 credentials — it stops without deleting anything.
 
 ---
 
@@ -144,6 +148,14 @@ Choose **3. Create podcast**. Termicast asks for the essentials:
 - **Output directory** — a folder on your server, e.g. `/srv/www/my-show`.
 - **Base URL** — the public web address of that folder, e.g.
   `https://podcasts.example.com/my-show`.
+
+> [!TIP]
+> Give your podcast its own address, like `media.example.com`, rather than
+> folding it into your main site's existing folder. Termicast manages files
+> by name (`audio/`, `images/`, `chapters/`, `transcripts/`, `feed.xml`) —
+> if your main site already has a folder or file with one of those names,
+> Termicast will treat it as its own. A dedicated subdomain or folder keeps
+> the two from ever overlapping.
 
 At the review screen you can choose **Edit field** to fill in optional extras
 (website, language, funding, OP3 metrics, etc.). When it all looks right, choose **Save**.
@@ -274,6 +286,15 @@ cloud storage. If you'd like, S3 hosting can also mirror a copy of `feed.xml`
 into the bucket, but the web-server copy remains the one listeners are pointed
 at.
 
+> [!WARNING]
+> Use a subdomain or folder dedicated to the podcast (e.g.
+> `media.example.com`) rather than a folder that's part of a general-purpose
+> website. Termicast only touches the files it creates, but it recognizes
+> them by name — `audio/`, `images/`, `chapters/`, `transcripts/`,
+> `feed.xml` — so a pre-existing folder or file with one of those names
+> elsewhere on a shared site would be mistaken for Termicast's own,
+> including by **Delete podcast** (§3), which removes them.
+
 Under **4. Hosting** in your show's menu:
 
 | Option | What it does |
@@ -339,6 +360,12 @@ files. You'll set two addresses:
 - **Base URL** — where your web server serves `feed.xml`.
 - **Asset base URL** — the public address of your bucket (e.g.
   `https://my-bucket.us-east-1.linodeobjects.com/my-show`).
+
+> [!TIP]
+> Give the show its own prefix within the bucket (or its own bucket), not
+> one shared with unrelated files — **Delete podcast** (§3) recursively
+> removes everything under a show's prefix, so anything else stored there
+> would go with it.
 
 > [!IMPORTANT]
 > Your S3 credentials live in a file called `~/.s3cfg` on the server — never

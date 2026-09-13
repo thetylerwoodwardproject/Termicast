@@ -4,8 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from termicast import cli
+from termicast import cli, s3deploy, storage
 from termicast.models import new_show
+from termicast.storage import asset_root
 
 
 def test_help_lists_new_commands(data_dir, capsys):
@@ -341,3 +342,98 @@ def test_hosting_banner_prints_before_regeneration(monkeypatch, db, capsys):
     assert "Hosting: S3-compatible storage." in out
     assert "Mirror feed.xml to S3: on" in out
     assert calls == ["regenerate"]
+
+
+# --- "Delete podcast" ------------------------------------------------------
+
+def test_interactive_menu_offers_delete_podcast(monkeypatch, db):
+    from termicast.prompts import Cancelled
+
+    def fake_menu(title, options, default=None):
+        assert "Delete podcast" in options
+        raise Cancelled()
+    monkeypatch.setattr(cli, "menu", fake_menu)
+    with pytest.raises(Cancelled):
+        cli._interactive(db, Mock())
+
+
+def test_delete_show_cancels_on_id_mismatch(db, show, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "text", lambda *a, **k: "not-the-id")
+    confirmed = []
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: confirmed.append(1) or True)
+    cli._delete_show(db, show)
+    assert not confirmed
+    assert db.get_show(show["id"]) is not None
+    assert "Cancelled. Nothing was changed." in capsys.readouterr().out
+
+
+def test_delete_show_cancels_on_final_no(db, show, monkeypatch):
+    monkeypatch.setattr(cli, "text", lambda *a, **k: show["id"])
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: False)
+    cli._delete_show(db, show)
+    assert db.get_show(show["id"]) is not None
+
+
+def test_delete_show_removes_local_files_and_db_row(db, show, monkeypatch):
+    root = asset_root(show)
+    (root / "audio").mkdir(parents=True)
+    (root / "audio" / "ep1.mp3").write_bytes(b"data")
+    monkeypatch.setattr(cli, "text", lambda *a, **k: show["id"])
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+
+    cli._delete_show(db, show)
+
+    assert not root.exists()
+    assert db.get_show(show["id"]) is None
+
+
+def test_delete_show_deletes_s3_prefix_before_local_and_db(db, monkeypatch, tmp_path):
+    record = new_show(
+        title="S3 show", description="d", author="a", owner_name="o",
+        owner_email="o@example.org", website="https://example.org", category="Technology",
+        base_url="https://example.org", output_dir=str(tmp_path / "out"), timezone="UTC",
+        explicit=False, hosting="s3", bucket="my-bucket", prefix="my-show",
+        asset_base_url="https://cdn.example.org",
+    )
+    s3_show = db.save_show(record)
+    (tmp_path / "out").mkdir(parents=True)
+
+    calls = []
+    monkeypatch.setattr(cli, "text", lambda *a, **k: s3_show["id"])
+    monkeypatch.setattr(cli, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(s3deploy, "delete_prefix",
+                        lambda show, dry_run=False: calls.append(("s3", dry_run)) or 0)
+    monkeypatch.setattr(storage, "delete_local_assets",
+                        lambda show, dry_run=False: calls.append(("local", dry_run)) or [])
+
+    cli._delete_show(db, s3_show)
+
+    assert calls == [("s3", True), ("s3", False), ("local", False)]
+    assert db.get_show(s3_show["id"]) is None
+
+
+def test_delete_show_does_not_touch_local_or_db_when_s3_preflight_fails(db, monkeypatch, tmp_path):
+    record = new_show(
+        title="S3 show", description="d", author="a", owner_name="o",
+        owner_email="o@example.org", website="https://example.org", category="Technology",
+        base_url="https://example.org", output_dir=str(tmp_path / "out"), timezone="UTC",
+        explicit=False, hosting="s3", bucket="my-bucket", prefix="my-show",
+        asset_base_url="https://cdn.example.org",
+    )
+    s3_show = db.save_show(record)
+    (tmp_path / "out").mkdir(parents=True)
+
+    def fail_preflight(show, dry_run=False):
+        raise RuntimeError("S3 credentials are not configured")
+    monkeypatch.setattr(s3deploy, "delete_prefix", fail_preflight)
+    local_delete = Mock()
+    monkeypatch.setattr(storage, "delete_local_assets", local_delete)
+    text_calls = []
+    monkeypatch.setattr(cli, "text", lambda *a, **k: text_calls.append(1) or s3_show["id"])
+
+    with pytest.raises(RuntimeError, match="S3 credentials are not configured"):
+        cli._delete_show(db, s3_show)
+
+    assert not text_calls
+    local_delete.assert_not_called()
+    assert db.get_show(s3_show["id"]) is not None

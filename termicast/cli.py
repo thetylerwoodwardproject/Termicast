@@ -562,9 +562,9 @@ def _interactive(db, publisher):
     show_banner()
     while True:
         action = menu("Termicast", ["Open podcast", "Import existing podcast", "Create podcast",
-                                    "Forget podcast", "Quit"])
+                                    "Forget podcast", "Delete podcast", "Quit"])
         try:
-            if action == 5:
+            if action == 6:
                 return 0
             if action == 1:
                 show = _select_show(db)
@@ -578,12 +578,56 @@ def _interactive(db, publisher):
                                     "Feed and chapter files will NOT be deleted."):
                     db.forget_show(show["id"])
                     console.print("Podcast forgotten. Output files were not deleted.", style=ACCENT)
+            elif action == 5:
+                show = _select_show(db, "Delete podcast")
+                if show:
+                    _delete_show(db, show)
         except EOFError:
             raise
         except Cancelled:
             console.print("Cancelled. Nothing was changed.")
         except Exception as exc:
             error(_describe_action_error(exc))
+
+
+def _delete_show(db, show):
+    """Permanently remove a podcast: S3 objects, then local managed files, then the DB row.
+
+    Every precondition is checked up front, and the DB row is deleted last, so
+    a failure partway through leaves the show visible and the operation safe
+    to retry -- already-removed S3 objects or local files are simply skipped
+    next time.
+    """
+    from .storage import local_delete_targets, delete_local_assets
+    from .s3deploy import delete_prefix
+
+    uses_s3 = bool(show.get("bucket")) and (show.get("hosting") == "s3" or show.get("mirror_feed"))
+    s3_count = delete_prefix(show, dry_run=True) if uses_s3 else None
+    local_paths = local_delete_targets(show)
+
+    console.print(f"This will permanently delete '{show['title']}' ({show['id']}):", style=ACCENT)
+    if local_paths:
+        for path in local_paths:
+            console.print(f"  {path}", markup=False)
+    else:
+        console.print("  (no local files found)")
+    if s3_count is not None:
+        location = f"s3://{show['bucket']}/{show.get('prefix', '')}"
+        console.print(f"  {s3_count} object(s) under {location}", markup=False)
+    console.print("This cannot be undone.", style=ACCENT)
+
+    if text(f"Type the podcast ID to confirm deletion ({show['id']})", required=True) != show["id"]:
+        console.print("Cancelled. Nothing was changed.")
+        return
+    if not confirm(f"Permanently delete {show['title']} and everything listed above?"):
+        console.print("Cancelled. Nothing was changed.")
+        return
+
+    if uses_s3:
+        delete_prefix(show, dry_run=False)
+    delete_local_assets(show)
+    db.forget_show(show["id"])
+    console.print("Podcast deleted.", style=ACCENT)
 
 
 def _validate(db, show_id):

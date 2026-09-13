@@ -194,6 +194,17 @@ Each show has an output directory and a public HTTPS **base URL**. The feed file
 and with S3 hosting you can additionally opt to mirror a copy of `feed.xml` into
 the bucket while the web-server copy remains canonical.
 
+> [!WARNING]
+> Give each show a dedicated subdomain (e.g. `media.example.com`) or a
+> directory used by nothing else — don't fold it into a general-purpose
+> website's existing root. Termicast identifies its own assets by fixed names
+> (`audio/`, `images/`, `chapters/`, `transcripts/`, `feed.xml`); a
+> pre-existing file or folder with one of those names in a shared web root
+> is indistinguishable from Termicast's own and will be treated (and, with
+> **Delete podcast**, removed) as such. The same applies to S3: use a
+> bucket/prefix dedicated to the show, since **Delete podcast** recursively
+> deletes everything under it.
+
 Hosting is configured under **Hosting** in the show menu:
 
 - **Local web server**: everything — the feed and the media — is served directly
@@ -251,7 +262,9 @@ to the account running Termicast instead:
 Termicast stages and writes only inside a directory that already exists, so
 this needs no further access to the shared parent. A pre-existing directory
 may also already hold unrelated files — only files Termicast itself created
-are ever touched or overwritten.
+are ever touched or overwritten. That's still narrower protection than a
+directory of its own, though (see the dedicated-subdomain note above) — it
+only helps for files that don't happen to share a name Termicast manages.
 
 `feed.xml` is written last, after its media is in place, so the feed never
 references a missing file. Deployment uses one `s4cmd` subprocess at a time
